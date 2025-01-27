@@ -185,6 +185,39 @@ async def on_message(message):
             f"hohohhohoho you and {name} hol up bro let me get some popcorn first",
             f"welahdalah wes nggak nggak nggak",
             "LMAOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+            f"pfft you and {name}? oh wait fr? wowzers.",
+            f"i mean... go off, i guess?? {name} tho??",
+            "full of drama but okay sure man",
+            "wow sounds like a fanfic waiting to happen.",
+            f"oh sure, and next you're gonna tell me the sky is green. {name}? lol",
+            f"bold of you to assume {name} feels the same way.",
+            "hmmmmmm lemme think....................naaaaah.",
+            "big moves big moves, but like, sure.",
+            "idk bro, it’s giving ‘friends only’ vibes.",
+            f"jadi begini, {name} lagi sibuk main minecraft ama aku tadi sih.",
+            "100% compatibility! oh wait, salah baca... itu 10%.",
+        ]
+        response = random.choice(responses)
+        await message.channel.send(response)
+        return
+
+    
+    think_pattern = r"what do you think of (.+) and (.+)"
+    think_match = re.match(think_pattern, message.content.lower())
+    if think_match:
+        person_a, person_b = think_match.groups()
+        responses = [
+            f"{person_a} and {person_b}????????? {person_a.upper()} AND {person_b.upper()}????????????????????? :cold_sweat:",
+            ":sob: :sob: :sob:",
+            f"damn bro i mean i heard {person_b} is a saint but with...{person_a}? hmmm....",
+            f"well i don't think oil and water can mix well. wait, oh you mean {person_a} and {person_b}?? same thing lah.",
+            f"Yes???? obvi???? are u crazy {person_a} and {person_b} basically inseparable are u insane.",
+            f"bukane mereka berdua barusan nikahan kemarin? oh blum? huh...",
+            f"bro.....i saw {person_a} playing love and deepspace behind {person_b}'s back....",
+            f"cocok jir maksude apa kamu tanya kek gitu seng gena.",
+            "hoho itu panas banget, sure bro.",
+            f"{person_a} and {person_b}? honestly, feels like when you accidentally add too much chili sauce—chaotic but oddly satisfying.",
+            f"aku denger mereka barusan duet karaoke lagu sedih, trus {person_a} nangis di pundaknya {person_b}...",
         ]
         response = random.choice(responses)
         await message.channel.send(response)
