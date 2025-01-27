@@ -104,18 +104,8 @@ async def send_qotd():
         if channel:
             await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
-        print("No QOTD available.")
+        print("question e habis lmao tolong semua nya mass tag sorin supaya dia tau rasa ga nambahin question")
 
-@bot.command(name="question")
-async def manual_qotd(ctx):
-    """Manually test the QOTD functionality."""
-    question = await get_qotd()
-    if question:
-        channel = bot.get_channel(QOTD_CHANNEL_ID)
-        if channel:
-            await channel.send(f"**Kodok Kuestion of the day:** {question}")
-    else:
-        await ctx.send("question e habis lmao tolong semua nya mass tag sorin supaya dia tau rasa ga nambahin question")
 @bot.event
 async def on_ready():
     global db_pool
