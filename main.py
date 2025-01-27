@@ -5,9 +5,16 @@ import random
 import re
 import json
 import os
+import asyncpg
 
-COORD_FILE = "coordinates.json"
-QOTD_FILE = "questions.json"
+DATABASE_URL = os.getenv("postgresql://postgres:aKdeUEmGUwdpvCOLmFARUzNAYhZSJRLJ@junction.proxy.rlwy.net:52664/railway")
+
+async def init_db():
+    """Initialize the database connection."""
+    return await asyncpg.create_pool(DATABASE_URL)
+
+db_pool = None
+
 QOTD_CHANNEL_ID = 1333314607535755345
 
 intents = discord.Intents.default()
@@ -16,6 +23,40 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 scheduler = AsyncIOScheduler()
 
 coordinates = {}
+
+async def get_qotd():
+    """Fetch the next question from the database."""
+    async with db_pool.acquire() as conn:
+        question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
+        if question:
+            await conn.execute(
+                "DELETE FROM questions WHERE id = $1", question["id"]
+            )
+            await conn.execute(
+                "INSERT INTO used_questions (question_id) VALUES ($1)", question["id"]
+            )
+            return question["question"]
+        return None
+
+
+async def add_coordinate(name, x, z):
+    """Add a coordinate to the database."""
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO coordinates (name, x, z) VALUES ($1, $2, $3)",
+            name, x, z
+        )
+
+async def delete_coordinate(name):
+    """Delete a coordinate from the database."""
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM coordinates WHERE name = $1", name)
+
+async def list_coordinates():
+    """Retrieve all coordinates from the database."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name, x, z FROM coordinates")
+        return [{"name": row["name"], "x": row["x"], "z": row["z"]} for row in rows]
 
 def load_coordinates():
     """Load coordinates from a JSON file."""
@@ -50,74 +91,62 @@ def save_qotd(qotd_list, used_qotd_list):
 @scheduler.scheduled_job("cron", hour=10)  # Schedule for 10:00 AM daily
 async def send_qotd():
     """Send the Question of the Day."""
-    qotd_list, used_qotd_list = load_qotd()
-    if qotd_list:
-        question = qotd_list.pop(0)  # Fetch and remove the first question
-        used_qotd_list.append(question)  # Move the question to used questions
-        save_qotd(qotd_list, used_qotd_list)
-
+    question = await get_qotd()
+    if question:
         channel = bot.get_channel(QOTD_CHANNEL_ID)
         if channel:
             await channel.send(f"**Question of the Day:** {question}")
     else:
         print("No QOTD available.")
+
 @bot.command(name="question")
 async def manual_qotd(ctx):
     """Manually test the QOTD functionality."""
-    qotd_list, used_qotd_list = load_qotd()
-    if qotd_list:
-        question = qotd_list.pop(0)  # Fetch and remove the first question
-        used_qotd_list.append(question)  # Move the question to used questions
-        save_qotd(qotd_list, used_qotd_list)
+    question = await get_qotd()
+    if question:
         await ctx.send(f"**Question of the Day:** {question}")
     else:
         await ctx.send("No QOTD available. Please add questions to the list.")
+
 @bot.event
 async def on_ready():
-    load_coordinates()
+    global db_pool
+    db_pool = await init_db()
     scheduler.start()
     print(f"Logged in as {bot.user}")
-
+    
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
-        return
-
-
-   
-        
+        return   
     # Coordinate Add
     add_pattern = r"add (\w+) (-?\d+) (-?\d+) dong"
     add_match = re.match(add_pattern, message.content.lower())
     if add_match:
         name, x, z = add_match.groups()
         x, z = int(x), int(z)
-        coordinates[name] = {"x": x, "z": z}
-        save_coordinates()
+        await add_coordinate(name, x, z)
         await message.channel.send(f"ok kontol Coordinate '{name}' added: X={x}, Z={z}")
         return
-
     # Coordinate Delete
     delete_pattern = r"delete (\w+) pls"
     delete_match = re.match(delete_pattern, message.content.lower())
     if delete_match:
         name = delete_match.group(1)
-        if name in coordinates:
-            del coordinates[name]
-            save_coordinates()
-            await message.channel.send(f"Coordinate '{name}' deleted. jahat nye..")
-        else:
-            await message.channel.send(f"mana ada yang nama nya'{name}'")
+        await delete_coordinate(name)
+        await message.channel.send(f"Coordinate '{name}' deleted. jahat nye..")
         return
+
 
     # List Coordinates
     list_pattern = r"coords po o"
     list_match = re.match(list_pattern, message.content.lower())
     if list_match:
-        if not coordinates:
+        coords = await list_coordinates()
+        if not coords:
             await message.channel.send("masih ga ada coords bro??")
         else:
-            coord_list = "\n\n".join([f"{name}: X={data['x']}, Z={data['z']}" for name, data in coordinates.items()])
+            coord_list = "\n\n".join([f"{c['name']}: X={c['x']}, Z={c['z']}" for c in coords])
             await message.channel.send(f"nyoh:\n{coord_list}")
         return
 
