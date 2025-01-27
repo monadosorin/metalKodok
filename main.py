@@ -7,11 +7,15 @@ import json
 import os
 import asyncpg
 
-DATABASE_URL = os.getenv("postgresql://postgres:aKdeUEmGUwdpvCOLmFARUzNAYhZSJRLJ@junction.proxy.rlwy.net:52664/railway")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 async def init_db():
     """Initialize the database connection."""
-    return await asyncpg.create_pool(DATABASE_URL)
+    try:
+        return await asyncpg.create_pool(DATABASE_URL)
+    except Exception as e:
+        print(f"Error connecting to the database: {e}")
+        return None
 
 db_pool = None
 
@@ -107,13 +111,16 @@ async def manual_qotd(ctx):
         await ctx.send(f"**Question of the Day:** {question}")
     else:
         await ctx.send("No QOTD available. Please add questions to the list.")
-
 @bot.event
 async def on_ready():
     global db_pool
-    db_pool = await init_db()
-    scheduler.start()
+    if db_pool is None:
+        db_pool = await init_db()
+    if db_pool:
+        print("Database connected.")
+        scheduler.start()
     print(f"Logged in as {bot.user}")
+
     
 @bot.event
 async def on_message(message):
