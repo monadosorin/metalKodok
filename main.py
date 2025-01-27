@@ -118,6 +118,11 @@ async def on_message(message):
         return
 
 
+    if message.content.lower() == "metal kodok":
+        await message.channel.send("halo")
+        return
+
+
     await bot.process_commands(message)
 
 bot.run(os.getenv("DISCORD_TOKEN"))
