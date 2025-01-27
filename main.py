@@ -112,7 +112,7 @@ async def on_message(message):
         await message.channel.send(response)
         return
 
-    special_names = ["vincent", "sam", "dottore", "itha", "arle", "gabriel", "andrew", "kaito", "lucci", "botil"]
+    special_names = ["vincent", "sam", "dottore", "itha", "arle", "gabriel", "andrew", "kaito", "lucci", "botil", "reigen"]
     if any(name in message.content.lower() for name in special_names):
         await message.channel.send("yayayayaya saya setuju")
         return
