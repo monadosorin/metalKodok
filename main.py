@@ -95,14 +95,14 @@ def save_qotd(qotd_list, used_qotd_list):
         json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
 
 
-@scheduler.scheduled_job("cron", hour=10)  # Schedule for 10:00 AM daily
+@scheduler.scheduled_job("cron", hour=14, minute=59)  # Schedule for 10:00 AM daily
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
     if question:
         channel = bot.get_channel(QOTD_CHANNEL_ID)
         if channel:
-            await channel.send(f"**Question of the Day:** {question}")
+            await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
         print("No QOTD available.")
 
