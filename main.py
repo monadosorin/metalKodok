@@ -1,15 +1,19 @@
 import discord
 from discord.ext import commands
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import random
 import re
 import json
 import os
 
 COORD_FILE = "coordinates.json"
+QOTD_FILE = "questions.json"
+QOTD_CHANNEL_ID = 1333314607535755345
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+scheduler = AsyncIOScheduler()
 
 coordinates = {}
 
@@ -27,9 +31,47 @@ def save_coordinates():
     with open(COORD_FILE, "w") as file:
         json.dump(coordinates, file, indent=4)
 
+
+def load_qotd():
+    """Load QOTD questions from a JSON file."""
+    if os.path.exists(QOTD_FILE):
+        with open(QOTD_FILE, "r") as file:
+            return json.load(file)
+    return []
+
+def save_qotd(qotd_list):
+    """Save updated QOTD questions to a JSON file."""
+    with open(QOTD_FILE, "w") as file:
+        json.dump(qotd_list, file, indent=4)
+
+@scheduler.scheduled_job("cron", hour=10)  # Schedule for 10:00 AM daily
+async def send_qotd():
+    """Send the Question of the Day."""
+    qotd_list = load_qotd()
+    if qotd_list:
+        question = qotd_list.pop(0)  # Fetch and remove the first question
+        save_qotd(qotd_list)
+
+        channel = bot.get_channel(QOTD_CHANNEL_ID)
+        if channel:
+            await channel.send(f"**Question of the Day:** {question}")
+    else:
+        print("No QOTD available.")
+@bot.command(name="question")
+async def manual_qotd(ctx):
+    """Manually test the QOTD functionality."""
+    qotd_list = load_qotd()
+    if qotd_list:
+        question = qotd_list.pop(0)  # Fetch and remove the first question
+        save_qotd(qotd_list)
+        await ctx.send(f"**Question of the Day:** {question}")
+    else:
+        await ctx.send("No QOTD available. Please add questions to the list.")
+
 @bot.event
 async def on_ready():
     load_coordinates()
+    scheduler.start()
     print(f"Logged in as {bot.user}")
 
 @bot.event
