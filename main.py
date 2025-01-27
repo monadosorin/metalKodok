@@ -229,8 +229,19 @@ async def on_message(message):
         return
 
 
-    if "metal kodok" in message.content.lower():
-        await message.channel.send("halo")
+     if "metal kodok" in message.content.lower():
+        responses = [
+            "halo",
+            "yes babe?",
+            "sapa manggil woi",
+            "berisik ae",
+            "^^",
+            "lek suka bilang ae ngab",
+            "yoi",
+            "huha",
+        ]
+        response = random.choice(responses)
+        await message.channel.send(response)
         return
 
 
