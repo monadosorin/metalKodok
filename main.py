@@ -106,6 +106,7 @@ async def on_message(message):
             "sure!!!! like peanut butter and jelly :yum:",
             f"wait u and {name} weren't dating already?",
             f"hohohhohoho you and {name} hol up bro let me get some popcorn first",
+            f"welahdalah wes nggak nggak nggak",
             "LMAOOOOOOOOOOOOOOOOOOOOOOOOOOO",
         ]
         response = random.choice(responses)
