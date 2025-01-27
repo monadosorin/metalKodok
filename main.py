@@ -229,7 +229,7 @@ async def on_message(message):
         return
 
 
-     if "metal kodok" in message.content.lower():
+    if "metal kodok" in message.content.lower():
         responses = [
             "halo",
             "yes babe?",
