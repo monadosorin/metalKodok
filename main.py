@@ -239,6 +239,16 @@ async def on_message(message):
             "lek suka bilang ae ngab",
             "yoi",
             "huha",
+            "greetings",
+            "yo",
+            "whats good",
+            "someone summoned me?!",
+            "im trying to sleep here man",
+            "i woke up for this",
+            "i was playing fornite",
+            "oh hi kamu kok ganteng hari ini damn",
+            "oh hi kamu kok jelek hari ini",
+            "sek ta lah",
         ]
         response = random.choice(responses)
         await message.channel.send(response)
