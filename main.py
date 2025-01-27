@@ -118,7 +118,7 @@ async def on_message(message):
         return
 
 
-    if message.content.lower() == "metal kodok":
+    if "metal kodok" in message.content.lower():
         await message.channel.send("halo")
         return
 
