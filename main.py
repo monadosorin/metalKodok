@@ -96,6 +96,26 @@ async def on_message(message):
         await message.channel.send(result)
         return
 
+    compatibility_pattern = r"affakah saya cocok dengan (.+)"
+    compatibility_match = re.match(compatibility_pattern, message.content.lower())
+    if compatibility_match:
+        name = compatibility_match.group(1)
+        responses = [
+            ":grimacing:",
+            f"wait you??? with {name}????",
+            "woah uh sure it could work maybe probably....",
+            f"yikes kamu dapet ide dari mana mau sama sih {name} bro",
+            f"yakin kah?? aku denger {name} kemarin jualan fent di rumah nya luna",
+            "sure!!!! like peanut butter and jelly :yum:",
+            f"wait u and {name} weren't dating already?",
+            f"hohohhohoho you and {name} hol up bro let me get some popcorn first",
+            "LMAOOOOOOOOOOOOOOOOOOOOOOOOOOO",
+        ]
+        response = random.choice(responses)
+        await message.channel.send(response)
+        return
+
+
     await bot.process_commands(message)
 
 bot.run(os.getenv("DISCORD_TOKEN"))
