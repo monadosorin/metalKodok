@@ -19,7 +19,7 @@ async def init_db():
 
 db_pool = None
 
-QOTD_CHANNEL_ID = 1333314607535755345
+QOTD_CHANNEL_ID = 1306689528211308575
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -95,7 +95,7 @@ def save_qotd(qotd_list, used_qotd_list):
         json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=4)  # Schedule for 10:00 AM daily
+@scheduler.scheduled_job("cron", hour=5, minute=0)  # Schedule for 10:00 AM daily
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
@@ -111,9 +111,11 @@ async def manual_qotd(ctx):
     """Manually test the QOTD functionality."""
     question = await get_qotd()
     if question:
-        await ctx.send(f"**Question of the Day:** {question}")
+        channel = bot.get_channel(QOTD_CHANNEL_ID)
+        if channel:
+            await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
-        await ctx.send("No QOTD available. Please add questions to the list.")
+        await ctx.send("question e habis lmao tolong semua nya mass tag sorin supaya dia tau rasa ga nambahin question")
 @bot.event
 async def on_ready():
     global db_pool
