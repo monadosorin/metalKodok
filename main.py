@@ -36,21 +36,25 @@ def load_qotd():
     """Load QOTD questions from a JSON file."""
     if os.path.exists(QOTD_FILE):
         with open(QOTD_FILE, "r") as file:
-            return json.load(file)
-    return []
+            data = json.load(file)
+            return data["questions"], data["used_questions"]
+    return [], []
 
-def save_qotd(qotd_list):
+
+def save_qotd(qotd_list, used_qotd_list):
     """Save updated QOTD questions to a JSON file."""
     with open(QOTD_FILE, "w") as file:
-        json.dump(qotd_list, file, indent=4)
+        json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
+
 
 @scheduler.scheduled_job("cron", hour=10)  # Schedule for 10:00 AM daily
 async def send_qotd():
     """Send the Question of the Day."""
-    qotd_list = load_qotd()
+    qotd_list, used_qotd_list = load_qotd()
     if qotd_list:
         question = qotd_list.pop(0)  # Fetch and remove the first question
-        save_qotd(qotd_list)
+        used_qotd_list.append(question)  # Move the question to used questions
+        save_qotd(qotd_list, used_qotd_list)
 
         channel = bot.get_channel(QOTD_CHANNEL_ID)
         if channel:
@@ -60,14 +64,14 @@ async def send_qotd():
 @bot.command(name="question")
 async def manual_qotd(ctx):
     """Manually test the QOTD functionality."""
-    qotd_list = load_qotd()
+    qotd_list, used_qotd_list = load_qotd()
     if qotd_list:
         question = qotd_list.pop(0)  # Fetch and remove the first question
-        save_qotd(qotd_list)
+        used_qotd_list.append(question)  # Move the question to used questions
+        save_qotd(qotd_list, used_qotd_list)
         await ctx.send(f"**Question of the Day:** {question}")
     else:
         await ctx.send("No QOTD available. Please add questions to the list.")
-
 @bot.event
 async def on_ready():
     load_coordinates()
