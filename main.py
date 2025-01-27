@@ -95,7 +95,7 @@ def save_qotd(qotd_list, used_qotd_list):
         json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=2)  # Schedule for 10:00 AM daily
+@scheduler.scheduled_job("cron", hour=8, minute=4)  # Schedule for 10:00 AM daily
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
