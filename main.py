@@ -38,10 +38,7 @@ async def on_message(message):
         return
 
 
-    special_names = ["vincent", "sam", "dottore", "itha", "arle", "gabriel", "andrew", "kaito", "lucci", "botil"]
-    if any(name in message.content.lower() for name in special_names):
-        await message.channel.send("yayayayaya saya setuju")
-        return
+   
         
     # Coordinate Add
     add_pattern = r"add (\w+) (-?\d+) (-?\d+) dong"
@@ -113,6 +110,11 @@ async def on_message(message):
         ]
         response = random.choice(responses)
         await message.channel.send(response)
+        return
+
+    special_names = ["vincent", "sam", "dottore", "itha", "arle", "gabriel", "andrew", "kaito", "lucci", "botil"]
+    if any(name in message.content.lower() for name in special_names):
+        await message.channel.send("yayayayaya saya setuju")
         return
 
 
