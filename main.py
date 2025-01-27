@@ -33,14 +33,17 @@ async def get_qotd():
     async with db_pool.acquire() as conn:
         question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
         if question:
-            await conn.execute(
-                "DELETE FROM questions WHERE id = $1", question["id"]
-            )
+            # Insert into used_questions first
             await conn.execute(
                 "INSERT INTO used_questions (question_id) VALUES ($1)", question["id"]
             )
+            # Then delete it from questions
+            await conn.execute(
+                "DELETE FROM questions WHERE id = $1", question["id"]
+            )
             return question["question"]
         return None
+
 
 
 async def add_coordinate(name, x, z):
