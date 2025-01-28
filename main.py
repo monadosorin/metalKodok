@@ -6,9 +6,36 @@ import re
 import json
 import os
 import asyncpg
+from openai import OpenAI 
+
+
+# ========== NEW DEEPSEEK INTEGRATION ========== #
+# Initialize DeepSeek client
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+deepseek_client = OpenAI(
+    api_key=DEEPSEEK_API_KEY,
+    base_url="https://api.deepseek.com"
+)
+
+BOT_NAME = "Metal Kodok"
+PERSONALITY = "YYou are sassy and witty, you like making jokes you have dry humor and you're sometimes sarcastic, you also swear in indonesian time to time. Keep responses concise and casual."
+
+async def ask_deepseek(prompt):
+    """Query DeepSeek's AI API"""
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": PERSONALITY},
+                {"role": "user", "content": prompt}
+            ],
+            stream=False
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Sorry bro im tweaking, error nih: {str(e)}."
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-
 async def init_db():
     """Initialize the database connection."""
     try:
@@ -121,6 +148,24 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return   
+
+
+    # ========== NEW AI FUNCTIONALITY ========== #
+    if message.content.lower().startswith("woi kodok"):
+        prompt = message.content[len("woi kodok"):].strip()
+        
+        if not prompt:
+            await message.channel.send(f"Yha? Manggil terus ga ngapa-ngapain {BOT_NAME}? 🐸")
+            return
+
+        async with message.channel.typing():
+            response = await ask_deepseek(prompt)
+        
+        # Add some personality to the response
+        endings = [" 🐸", " :3", " >_<", " (｡•̀ᴗ-)✧", " 🙏", " :metal:"]
+        await message.channel.send(f"{response}{random.choice(endings)}")
+        return
+        
     # Coordinate Add
     add_pattern = r"add (\w+) (-?\d+) (-?\d+) dong"
     add_match = re.match(add_pattern, message.content.lower())
