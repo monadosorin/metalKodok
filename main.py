@@ -7,7 +7,13 @@ import json
 import os
 import asyncpg
 from openai import OpenAI 
+from collections import defaultdict
+from datetime import datetime, timedelta
 
+# Store conversation history with expiration
+conversation_histories = defaultdict(list)
+MAX_HISTORY = 5  # Keep last 5 messages
+SESSION_TIMEOUT = 300  # 5 minutes in seconds
 
 # ========== NEW DEEPSEEK INTEGRATION ========== #
 # Initialize DeepSeek client
@@ -27,17 +33,42 @@ Keep your responses short, to the point, and engaging. You balance humor with su
 """
 
 
+async def get_history_key(message):
+    """Create a unique key for conversation tracking (user + channel)"""
+    return (message.author.id, message.channel.id)
 
+async def add_to_history(key, role, content):
+    """Add message to conversation history"""
+    conversation_histories[key].append({
+        "role": role, 
+        "content": content,
+        "timestamp": datetime.now()  # Add this line
+    })
+    if len(conversation_histories[key]) > MAX_HISTORY:
+        conversation_histories[key] = conversation_histories[key][-MAX_HISTORY:]
 
-async def ask_deepseek(prompt):
-    """Query DeepSeek's AI API"""
+async def clear_expired_sessions():
+    """Clean up old conversations"""
+    now = datetime.now()
+    expired_keys = []
+    
+    for key, history in conversation_histories.items():
+        if history and (now - history[-1].get('timestamp', now)).total_seconds() > SESSION_TIMEOUT:
+            expired_keys.append(key)
+    
+    for key in expired_keys:
+        del conversation_histories[key]
+
+# Update your existing ask_deepseek function
+async def ask_deepseek(history_key):
+    """Query DeepSeek with conversation history"""
     try:
+        messages = [{"role": "system", "content": PERSONALITY}]
+        messages += [msg for msg in conversation_histories.get(history_key, [])]
+        
         response = deepseek_client.chat.completions.create(
             model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": PERSONALITY},
-                {"role": "user", "content": prompt}
-            ],
+            messages=messages,
             stream=False
         )
         return response.choices[0].message.content.strip()
@@ -152,6 +183,13 @@ async def on_ready():
         scheduler.start()
     print(f"Logged in as {bot.user}")
 
+# This should be defined at the top level, not inside on_ready
+@scheduler.scheduled_job("interval", minutes=5)
+async def clear_sessions_task():
+    await clear_expired_sessions()
+
+    
+
     
 @bot.event
 async def on_message(message):
@@ -159,19 +197,42 @@ async def on_message(message):
         return   
 
 
-    # ========== NEW AI FUNCTIONALITY ========== #
+      # Handle conversation memory
+    history_key = await get_history_key(message)
+    
     if message.content.lower().startswith("woi kodok"):
         prompt = message.content[len("woi kodok"):].strip()
         
         if not prompt:
-            await message.channel.send(f"Yha? Manggil terus ga ngapa-ngapain {BOT_NAME}? 🐸")
+            await message.channel.send(f"what kenapa manggil manggil ak tau aku ganteng {BOT_NAME}? 🐸")
             return
 
+        # Add user message to history
+        await add_to_history(history_key, "user", prompt)
+        
         async with message.channel.typing():
-            response = await ask_deepseek(prompt)
+            response = await ask_deepseek(history_key)
+        
+        # Add bot response to history
+        await add_to_history(history_key, "assistant", response)
         
         # Add some personality to the response
-        endings = [" 🐸", " :3", " >_<", " (｡•̀ᴗ-)✧", " 🙏", " :metal:"]
+        endings = ["🐸"]
+        await message.channel.send(f"{response}{random.choice(endings)}")
+        return
+
+    # Handle follow-up messages in conversation
+    if history_key in conversation_histories:
+        # Add user message to history
+        await add_to_history(history_key, "user", message.content)
+        
+        async with message.channel.typing():
+            response = await ask_deepseek(history_key)
+        
+        # Add bot response to history
+        await add_to_history(history_key, "assistant", response)
+        
+        endings = [" 🐸"]
         await message.channel.send(f"{response}{random.choice(endings)}")
         return
         
