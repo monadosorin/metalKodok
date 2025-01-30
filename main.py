@@ -42,7 +42,7 @@ async def add_to_history(key, role, content):
     conversation_histories[key].append({
         "role": role, 
         "content": content,
-        "timestamp": datetime.now()  # Add this line
+        "timestamp": datetime.now().isoformat()  # Store as ISO string instead of datetime object
     })
     if len(conversation_histories[key]) > MAX_HISTORY:
         conversation_histories[key] = conversation_histories[key][-MAX_HISTORY:]
@@ -53,8 +53,11 @@ async def clear_expired_sessions():
     expired_keys = []
     
     for key, history in conversation_histories.items():
-        if history and (now - history[-1].get('timestamp', now)).total_seconds() > SESSION_TIMEOUT:
-            expired_keys.append(key)
+        if history:
+            # Convert ISO string back to datetime for comparison
+            last_timestamp = datetime.fromisoformat(history[-1].get('timestamp', now.isoformat()))
+            if (now - last_timestamp).total_seconds() > SESSION_TIMEOUT:
+                expired_keys.append(key)
     
     for key in expired_keys:
         del conversation_histories[key]
@@ -64,7 +67,9 @@ async def ask_deepseek(history_key):
     """Query DeepSeek with conversation history"""
     try:
         messages = [{"role": "system", "content": PERSONALITY}]
-        messages += [msg for msg in conversation_histories.get(history_key, [])]
+        # Only include role and content in the messages
+        messages += [{"role": msg["role"], "content": msg["content"]} 
+                   for msg in conversation_histories.get(history_key, [])]
         
         response = deepseek_client.chat.completions.create(
             model="deepseek-chat",
