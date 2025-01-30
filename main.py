@@ -248,7 +248,7 @@ async def on_message(message):
                 del conversation_histories[history_key]
             
             endings = ["🐸"]
-            await message.channel.send(f"{response}{random.choice(endings)}")
+            await message.reply(f"{response}", mention_author=False)
         return  # Ensure return after processing
 
     # Handle follow-up messages in conversation
@@ -274,7 +274,7 @@ async def on_message(message):
                 del conversation_histories[history_key]
             
             endings = [" 🐸"]
-            await message.channel.send(f"{response}{random.choice(endings)}")
+            await message.reply(f"{response}", mention_author=False)
         return  # Ensure return after processing
         
     # Coordinate Add
