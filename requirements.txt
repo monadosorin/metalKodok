@@ -5,3 +5,4 @@ psycopg2-binary
 python-dotenv
 asyncpg
 openai>=1.0.0
+asyncio
