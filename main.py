@@ -67,7 +67,6 @@ async def ask_deepseek(history_key):
     """Query DeepSeek with conversation history"""
     try:
         messages = [{"role": "system", "content": PERSONALITY}]
-        # Only include role and content in the messages
         messages += [{"role": msg["role"], "content": msg["content"]} 
                    for msg in conversation_histories.get(history_key, [])]
         
@@ -76,9 +75,15 @@ async def ask_deepseek(history_key):
             messages=messages,
             stream=False
         )
-        return response.choices[0].message.content.strip()
+        return {
+            "content": response.choices[0].message.content.strip(),
+            "error": False
+        }
     except Exception as e:
-        return f"Sorry bro im tweaking, error nih: {str(e)}."
+        return {
+            "content": f"Sorry bro im tweaking, error nih: {str(e)}.",
+            "error": True  # Add error flag
+        }
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 async def init_db():
@@ -227,15 +232,20 @@ async def on_message(message):
         await add_to_history(history_key, "user", prompt)
         
         async with message.channel.typing():
-            response = await ask_deepseek(history_key)
+            response_data = await ask_deepseek(history_key)
+            response = response_data["content"]
         
         # Add bot response to history
         await add_to_history(history_key, "assistant", response)
         
+        # If there's an error, clear the session after sending the message
+        if response_data["error"]:
+            del conversation_histories[history_key]
+        
         endings = ["🐸"]
         await message.channel.send(f"{response}{random.choice(endings)}")
         return
-    
+            
     # Handle follow-up messages in conversation
     if history_key in conversation_histories:
         # Check if the session has expired
@@ -249,10 +259,15 @@ async def on_message(message):
         await add_to_history(history_key, "user", message.content)
         
         async with message.channel.typing():
-            response = await ask_deepseek(history_key)
+            response_data = await ask_deepseek(history_key)
+            response = response_data["content"]
         
         # Add bot response to history
         await add_to_history(history_key, "assistant", response)
+        
+        # If error occurs, clear session
+        if response_data["error"]:
+            del conversation_histories[history_key]
         
         endings = [" 🐸"]
         await message.channel.send(f"{response}{random.choice(endings)}")
