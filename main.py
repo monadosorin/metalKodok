@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 # Store conversation history with expiration
 conversation_histories = defaultdict(list)
 MAX_HISTORY = 5  # Keep last 5 messages
-SESSION_TIMEOUT = 300  # 5 minutes in seconds
+SESSION_TIMEOUT = 180  # 3 minutes in seconds (changed from 300)
 
 # ========== NEW DEEPSEEK INTEGRATION ========== #
 # Initialize DeepSeek client
@@ -204,42 +204,59 @@ async def on_message(message):
 
       # Handle conversation memory
     history_key = await get_history_key(message)
+
+
+     # New command: "okay shut up kodok"
+    if message.content.lower() == "okay shut up kodok":
+        if history_key in conversation_histories:
+            del conversation_histories[history_key]
+            await message.channel.send("okay man damn :cold_sweat:")
+        else:
+            await message.channel.send("bro i wasn't even talking??? :sob: ")
+        return
+        
+   # Handle "woi kodok" command
+if message.content.lower().startswith("woi kodok"):
+    prompt = message.content[len("woi kodok"):].strip()
     
-    if message.content.lower().startswith("woi kodok"):
-        prompt = message.content[len("woi kodok"):].strip()
-        
-        if not prompt:
-            await message.channel.send(f"what kenapa manggil manggil ak tau aku ganteng {BOT_NAME}? 🐸")
-            return
-
-        # Add user message to history
-        await add_to_history(history_key, "user", prompt)
-        
-        async with message.channel.typing():
-            response = await ask_deepseek(history_key)
-        
-        # Add bot response to history
-        await add_to_history(history_key, "assistant", response)
-        
-        # Add some personality to the response
-        endings = ["🐸"]
-        await message.channel.send(f"{response}{random.choice(endings)}")
+    if not prompt:
+        await message.channel.send(f"what kenapa manggil manggil ak tau aku ganteng {BOT_NAME}? 🐸")
         return
 
-    # Handle follow-up messages in conversation
-    if history_key in conversation_histories:
-        # Add user message to history
-        await add_to_history(history_key, "user", message.content)
-        
-        async with message.channel.typing():
-            response = await ask_deepseek(history_key)
-        
-        # Add bot response to history
-        await add_to_history(history_key, "assistant", response)
-        
-        endings = [" 🐸"]
-        await message.channel.send(f"{response}{random.choice(endings)}")
+    # Add user message to history
+    await add_to_history(history_key, "user", prompt)
+    
+    async with message.channel.typing():
+        response = await ask_deepseek(history_key)
+    
+    # Add bot response to history
+    await add_to_history(history_key, "assistant", response)
+    
+    endings = ["🐸"]
+    await message.channel.send(f"{response}{random.choice(endings)}")
+    return
+
+# Handle follow-up messages in conversation
+if history_key in conversation_histories:
+    # Check if the session has expired
+    last_timestamp = datetime.fromisoformat(conversation_histories[history_key][-1].get('timestamp', datetime.now().isoformat()))
+    if (datetime.now() - last_timestamp).total_seconds() > SESSION_TIMEOUT:
+        # Silently clear the session without sending a message
+        del conversation_histories[history_key]
         return
+
+    # Add user message to history
+    await add_to_history(history_key, "user", message.content)
+    
+    async with message.channel.typing():
+        response = await ask_deepseek(history_key)
+    
+    # Add bot response to history
+    await add_to_history(history_key, "assistant", response)
+    
+    endings = [" 🐸"]
+    await message.channel.send(f"{response}{random.choice(endings)}")
+    return
         
     # Coordinate Add
     add_pattern = r"add (\w+) (-?\d+) (-?\d+) dong"
