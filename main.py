@@ -13,7 +13,7 @@ import asyncio
 from collections import defaultdict
 from discord import HTTPException
 
-# Store conversation history with expiration
+
 conversation_histories = defaultdict(list)
 MAX_HISTORY = 5  # Keep last 5 messages
 SESSION_TIMEOUT = 180  # 3 minutes in seconds (changed from 300)
