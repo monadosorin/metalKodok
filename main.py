@@ -15,21 +15,21 @@ from discord import HTTPException
 
 
 conversation_histories = defaultdict(list)
-MAX_HISTORY = 5  # Keep last 5 messages
-SESSION_TIMEOUT = 180  # 3 minutes in seconds (changed from 300)
-# Add a locks dictionary
+MAX_HISTORY = 5 
+SESSION_TIMEOUT = 180 
+
 locks = defaultdict(asyncio.Lock)
 
-# Add these at the top with other constants
-MESSAGE_COOLDOWN = 1.5  # 1.5 seconds between bot messages
-USER_COOLDOWN = 3.0  # 3 seconds between user-initiated conversations
 
-# Add to existing code
+MESSAGE_COOLDOWN = 1.5 
+USER_COOLDOWN = 3.0 
+
+
 message_queue = asyncio.Queue()
 processing_lock = asyncio.Lock()
 
-# ========== NEW DEEPSEEK INTEGRATION ========== #
-# Initialize DeepSeek client
+
+
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 deepseek_client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
@@ -62,7 +62,7 @@ async def add_to_history(key, role, content):
         conversation_histories[key] = conversation_histories[key][-MAX_HISTORY:]
 
 
-# Modified clear_expired_sessions
+
 async def clear_expired_sessions():
     """Clean up old conversations more efficiently"""
     now = datetime.now()
@@ -74,14 +74,14 @@ async def clear_expired_sessions():
             if (now - last_timestamp).total_seconds() > SESSION_TIMEOUT:
                 expired_keys.append(key)
 
-    # Delete in batches
+  
     for i in range(0, len(expired_keys), 100):
         batch = expired_keys[i:i + 100]
         for key in batch:
             del conversation_histories[key]
-        await asyncio.sleep(0.5)  # Prevent blocking
+        await asyncio.sleep(0.5) 
 
-# Modified ask_deepseek function with retry logic
+
 async def ask_deepseek(history_key, retry_count=3):
     """Query DeepSeek with conversation history and retry logic"""
     for attempt in range(retry_count):
@@ -109,7 +109,7 @@ async def ask_deepseek(history_key, retry_count=3):
                 }
 
 
-# Modified message handling with rate limit protection
+
 async def safe_reply(message, response):
     """Handle message replies with rate limit protection"""
     try:
@@ -133,7 +133,7 @@ async def message_processor():
                 if e.status == 429:
                     print(f"Rate limited. Retrying after {e.retry_after}s")
                     await asyncio.sleep(e.retry_after)
-                    await message_queue.put((message, response))  # Re-add to queue
+                    await message_queue.put((message, response))
             except Exception as e:
                 print(f"Failed to send message: {str(e)}")
             finally:
@@ -144,7 +144,7 @@ async def message_processor():
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-# Modified init_db function
+
 async def init_db():
     """Initialize the database connection with connection pooling"""
     try:
@@ -175,11 +175,11 @@ async def get_qotd():
     async with db_pool.acquire() as conn:
         question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
         if question:
-            # Insert into used_questions first
+           
             await conn.execute(
                 "INSERT INTO used_questions (question_id) VALUES ($1)", question["id"]
             )
-            # Then delete it from questions
+           
             await conn.execute(
                 "DELETE FROM questions WHERE id = $1", question["id"]
             )
@@ -240,7 +240,7 @@ def save_qotd(qotd_list, used_qotd_list):
         json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
 
 
-@scheduler.scheduled_job("cron", hour=5, minute=0)  # Schedule for 10:00 AM daily
+@scheduler.scheduled_job("cron", hour=5, minute=0)  
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
@@ -269,7 +269,7 @@ async def handle_command_error(message):
     await message.channel.send(random.choice(error_responses))
 
 
-# Start processor when bot starts
+
 @bot.event
 async def on_ready():
     global db_pool, message_processor_task
@@ -278,11 +278,11 @@ async def on_ready():
     if db_pool:
         print("Database connected.")
         scheduler.start()
-    # Start message processor
+  
     message_processor_task = asyncio.create_task(message_processor())
     print(f"Logged in as {bot.user}")
 
-# This should be defined at the top level, not inside on_ready
+
 @scheduler.scheduled_job("interval", minutes=5)
 async def clear_sessions_task():
     await clear_expired_sessions()
@@ -293,10 +293,10 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-        # Handle conversation memory
+      
     history_key = await get_history_key(message)
 
-    # New command: "okay shut up kodok"
+  
     if message.content.lower() == "okay shut up kodok":
         if history_key in conversation_histories:
             del conversation_histories[history_key]
@@ -305,7 +305,7 @@ async def on_message(message):
             await message_queue.put((message, "bro i wasn't even talking??? :sob: "))
         return
 
-    # Handle "woi kodok" command
+  
     if message.content.lower().startswith("woi kodok"):
         prompt = message.content[len("woi kodok"):].strip()
 
@@ -313,42 +313,42 @@ async def on_message(message):
             await message_queue.put((message, f"what kenapa manggil manggil ak tau aku ganteng {BOT_NAME}? 🐸"))
             return
 
-        async with locks[history_key]:  # Acquire lock for this conversation
-            # Add user message to history
+        async with locks[history_key]:  
+           
             await add_to_history(history_key, "user", prompt)
 
             async with message.channel.typing():
                 response_data = await ask_deepseek(history_key)
                 response = response_data["content"]
 
-            # Add bot response to history
+          
             await add_to_history(history_key, "assistant", response)
 
-            # If error, clear session
+           
             if response_data["error"]:
                 del conversation_histories[history_key]
 
             endings = ["🐸"]
             await message_queue.put ((message, response))
-        return  # Ensure return after processing
+        return  
 
-    # Handle follow-up messages in conversation
+   
     if history_key in conversation_histories:
-        async with locks[history_key]:  # Acquire lock for this conversation
-            # Check session expiration
+        async with locks[history_key]: 
+            
             last_timestamp = datetime.fromisoformat(conversation_histories[history_key][-1]['timestamp'])
             if (datetime.now() - last_timestamp).total_seconds() > SESSION_TIMEOUT:
                 del conversation_histories[history_key]
                 return
 
-            # Add user message to history
+           
             await add_to_history(history_key, "user", message.content)
 
             async with message.channel.typing():
                 response_data = await ask_deepseek(history_key)
                 response = response_data["content"]
 
-            # Add bot response to history
+           
             await add_to_history(history_key, "assistant", response)
 
             if response_data["error"]:
@@ -356,9 +356,9 @@ async def on_message(message):
 
             endings = [" 🐸"]
             await message_queue.put((message, response))
-        return  # Ensure return after processing
+        return  
 
-    # Coordinate Add
+   
     add_pattern = r"add (\w+) (-?\d+) (-?\d+) dong"
     add_match = re.match(add_pattern, message.content.lower())
     if add_match:
@@ -367,7 +367,7 @@ async def on_message(message):
         await add_coordinate(name, x, z)
         await message_queue.put((message, f"ok kontol Coordinate '{name}' added: X={x}, Z={z}"))
         return
-    # Coordinate Delete
+   
     delete_pattern = r"delete (\w+) pls"
     delete_match = re.match(delete_pattern, message.content.lower())
     if delete_match:
@@ -376,7 +376,7 @@ async def on_message(message):
         await message_queue.put((message, f"Coordinate '{name}' deleted. jahat nye.."))
         return
 
-    # List Coordinates
+  
     list_pattern = r"coords po o"
     list_match = re.match(list_pattern, message.content.lower())
     if list_match:
@@ -388,7 +388,7 @@ async def on_message(message):
             await message_queue.put((message, f"nyoh:\n{coord_list}"))
         return
 
-    # Rock Paper Scissors Game
+    
     rps_pattern = r"i pick (rock|paper|scissors)"
     rps_match = re.match(rps_pattern, message.content.lower())
     if rps_match:
