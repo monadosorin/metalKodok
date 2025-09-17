@@ -285,6 +285,15 @@ async def on_ready():
 @scheduler.scheduled_job("interval", minutes=5)
 async def clear_sessions_task():
     await clear_expired_sessions()
+    
+@bot.command(name="question")
+async def test_qotd(ctx):
+    """Test the Question of the Day manually"""
+    question = await get_qotd()
+    if question:
+        await ctx.send(f"**Kodok Kuestion of the day (Test):** {question}")
+    else:
+        await ctx.send("No more questions left in the database, bro 😭")
 
 
 @bot.event
