@@ -243,12 +243,15 @@ def save_qotd(qotd_list, used_qotd_list):
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
+    channel = bot.get_channel(QOTD_CHANNEL_ID)
+    if not channel:
+        print(f"❌ Could not find channel with ID {QOTD_CHANNEL_ID}")
+        return
     if question:
-        channel = bot.get_channel(QOTD_CHANNEL_ID)
-        if channel:
-            await channel.send(f"**Kodok Kuestion of the day:** {question}")
+        await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
-        print("question e habis lmao tolong semua nya mass tag sorin supaya dia tau rasa ga nambahin question")
+        await channel.send("❌ No more questions in the database.")
+
 
 
 @bot.event
