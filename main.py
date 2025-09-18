@@ -393,7 +393,7 @@ def describe_activity(member):
 # Add this function to generate commentary
 async def generate_activity_commentary(activity_description):
     """Generate witty commentary about the user's activity"""
-    prompt = f"A user is {activity_description}. Generate a short, witty, sarcastic commentary about this in Indonesian mixed with English. Keep it under 2 sentences and make it funny."
+    prompt = f"A user is {activity_description}. Generate a short, witty but lighthearted commentary in Indonesian mixed with English. Show curiosity - ask what song they're listening to, why they like it, or what their game is about. Keep it under 2 sentences and make it playful, not mean."
 
     try:
         response = deepseek_client.chat.completions.create(
