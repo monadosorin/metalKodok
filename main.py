@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 import asyncio
 from collections import defaultdict
 from discord import HTTPException
+from apscheduler.triggers.cron import CronTrigger
 
 conversation_histories = defaultdict(list)
 MAX_HISTORY = 5 
@@ -239,7 +240,6 @@ def save_qotd(qotd_list, used_qotd_list):
         json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
 
 
-@scheduler.scheduled_job("cron", hour=5, minute=0)  
 async def send_qotd():
     """Send the Question of the Day."""
     question = await get_qotd()
@@ -251,7 +251,12 @@ async def send_qotd():
         await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
         await channel.send("❌ No more questions in the database.")
-
+        
+# Schedule for 12:10 Jakarta time (for testing)
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=10, timezone="Asia/Jakarta"))
+def scheduled_qotd():
+    asyncio.create_task(send_qotd())
+    print("✅ QOTD task triggered (scheduled).")
 
 
 @bot.event
