@@ -316,12 +316,12 @@ async def get_random_user_with_activity(guild):
     users_with_activities = []
     
     print(f"🔍 Scanning {len(guild.members)} members in guild: {guild.name}")
-     try:
-        print(f"📋 Total members in cache: {len(guild.members)}")
-        # Uncomment next line if members are missing from cache
-        # await guild.chunk()  # This forces Discord to send all members
-    except Exception as e:
-        print(f"❌ Error fetching members: {e}")
+        try:
+            print(f"📋 Total members in cache: {len(guild.members)}")
+            # Uncomment next line if members are missing from cache
+            # await guild.chunk()  # This forces Discord to send all members
+        except Exception as e:
+            print(f"❌ Error fetching members: {e}")
     
     for member in guild.members:
         # Skip bots and offline users
