@@ -242,21 +242,24 @@ def save_qotd(qotd_list, used_qotd_list):
 
 async def send_qotd():
     """Send the Question of the Day."""
-    question = await get_qotd()
-    channel = bot.get_channel(QOTD_CHANNEL_ID)
-    if not channel:
-        print(f"❌ Could not find channel with ID {QOTD_CHANNEL_ID}")
-        return
-    if question:
-        await channel.send(f"**Kodok Kuestion of the day:** {question}")
-    else:
-        await channel.send("❌ No more questions in the database.")
+    try:
+        question = await get_qotd()
+        channel = bot.get_channel(QOTD_CHANNEL_ID)
+        if not channel:
+            print(f"❌ Could not find channel with ID {QOTD_CHANNEL_ID}")
+            return
+        if question:
+            await channel.send(f"**Kodok Kuestion of the day:** {question}")
+        else:
+            await channel.send("❌ No more questions in the database.")
+    except Exception as e:
+        print(f"Error in QOTD: {e}")
 
 
-@scheduler.scheduled_job(CronTrigger(hour=12, minute=16, timezone="Asia/Jakarta"))
-def scheduled_qotd():
-    loop = asyncio.get_event_loop()
-    loop.create_task(send_qotd())
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=23, timezone="Asia/Jakarta"))
+async def scheduled_qotd():
+    """Scheduled QOTD task that runs in the bot's event loop"""
+    await send_qotd()
     print("✅ QOTD task triggered (scheduled).")
 
 
