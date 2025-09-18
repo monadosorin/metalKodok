@@ -251,12 +251,12 @@ async def send_qotd():
         if question:
             await channel.send(f"**Kodok Kuestion of the day:** {question}")
         else:
-            await channel.send("❌ No more questions in the database.")
+            await channel.send("question e habis bolo, tolong suruh sorin buat refill lol")
     except Exception as e:
         print(f"Error in QOTD: {e}")
 
 
-@scheduler.scheduled_job(CronTrigger(hour=12, minute=23, timezone="Asia/Jakarta"))
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=0, timezone="Asia/Jakarta"))
 async def scheduled_qotd():
     """Scheduled QOTD task that runs in the bot's event loop"""
     await send_qotd()
