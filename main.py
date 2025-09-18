@@ -373,11 +373,11 @@ async def generate_activity_commentary(activity_description):
         return f"Waduh, liat nih orang {activity_description}... interesting choice! 🐸"
 
 # Add this scheduled job (example: runs every 2 hours)
+
+TARGET_CHANNEL_ID = 1333665831200100353
 @scheduler.scheduled_job(CronTrigger(hour='*/2', minute=0, timezone="Asia/Jakarta"))
 async def random_activity_commentary():
-    """Randomly comment on a user's activity every 2 hours"""
     try:
-        # Get a random guild (server) the bot is in
         if not bot.guilds:
             return
         
@@ -385,18 +385,15 @@ async def random_activity_commentary():
         user = await get_random_user_with_activity(guild)
         
         if not user:
-            print("No users with activities found")
             return
         
         activity_description = describe_activity(user)
         commentary = await generate_activity_commentary(activity_description)
         
-        # Send to a random channel (or specify a channel ID)
-        text_channels = [channel for channel in guild.text_channels if channel.permissions_for(guild.me).send_messages]
-        
-        if text_channels:
-            channel = random.choice(text_channels)
-            await channel.send(commentary)
+        # Send to specific channel
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+        if target_channel:
+            await target_channel.send(commentary)
             print(f"✅ Activity commentary sent for {user.display_name}")
             
     except Exception as e:
