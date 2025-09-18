@@ -251,11 +251,12 @@ async def send_qotd():
         await channel.send(f"**Kodok Kuestion of the day:** {question}")
     else:
         await channel.send("❌ No more questions in the database.")
-        
-# Schedule for 12:10 Jakarta time (for testing)
-@scheduler.scheduled_job(CronTrigger(hour=12, minute=10, timezone="Asia/Jakarta"))
+
+
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=16, timezone="Asia/Jakarta"))
 def scheduled_qotd():
-    asyncio.create_task(send_qotd())
+    loop = asyncio.get_event_loop()
+    loop.create_task(send_qotd())
     print("✅ QOTD task triggered (scheduled).")
 
 
