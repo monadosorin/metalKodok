@@ -308,6 +308,121 @@ async def test_qotd(ctx):
         await ctx.send("No more questions left in the database, bro 😭")
 
 
+# Add this function to get a random user with an activity
+async def get_random_user_with_activity(guild):
+    """Get a random user who has a current activity (game, music, etc)"""
+    users_with_activities = []
+    
+    for member in guild.members:
+        # Skip bots and offline users
+        if member.bot or member.status == discord.Status.offline:
+            continue
+        
+        # Check if user has any activities
+        if member.activities:
+            for activity in member.activities:
+                # Filter out generic activities like "Custom Status"
+                if (isinstance(activity, discord.Spotify) or 
+                    isinstance(activity, discord.Game) or 
+                    isinstance(activity, discord.Streaming) or
+                    (hasattr(activity, 'type') and activity.type != discord.ActivityType.custom)):
+                    users_with_activities.append(member)
+                    break
+    
+    return random.choice(users_with_activities) if users_with_activities else None
+
+# Add this function to describe the activity
+def describe_activity(member):
+    """Generate a description of the user's activities"""
+    if not member.activities:
+        return f"{member.display_name} is doing nothing interesting"
+    
+    activities_info = []
+    for activity in member.activities:
+        if isinstance(activity, discord.Spotify):
+            activities_info.append(f"listening to {activity.title} by {activity.artist}")
+        elif isinstance(activity, discord.Game):
+            activities_info.append(f"playing {activity.name}")
+        elif isinstance(activity, discord.Streaming):
+            activities_info.append(f"streaming {activity.name} on {activity.platform}")
+        elif activity.type == discord.ActivityType.watching:
+            activities_info.append(f"watching {activity.name}")
+        elif activity.type == discord.ActivityType.listening:
+            activities_info.append(f"listening to {activity.name}")
+        else:
+            activities_info.append(f"doing {activity.name}")
+    
+    return f"{member.display_name} is {', and '.join(activities_info)}"
+
+# Add this function to generate commentary
+async def generate_activity_commentary(activity_description):
+    """Generate witty commentary about the user's activity"""
+    prompt = f"A user is {activity_description}. Generate a short, witty, sarcastic commentary about this in Indonesian mixed with English. Keep it under 2 sentences and make it funny."
+
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": PERSONALITY},
+                {"role": "user", "content": prompt}
+            ],
+            stream=False
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Waduh, liat nih orang {activity_description}... interesting choice! 🐸"
+
+# Add this scheduled job (example: runs every 2 hours)
+@scheduler.scheduled_job(CronTrigger(hour='*/2', minute=0, timezone="Asia/Jakarta"))
+async def random_activity_commentary():
+    """Randomly comment on a user's activity every 2 hours"""
+    try:
+        # Get a random guild (server) the bot is in
+        if not bot.guilds:
+            return
+        
+        guild = random.choice(bot.guilds)
+        user = await get_random_user_with_activity(guild)
+        
+        if not user:
+            print("No users with activities found")
+            return
+        
+        activity_description = describe_activity(user)
+        commentary = await generate_activity_commentary(activity_description)
+        
+        # Send to a random channel (or specify a channel ID)
+        text_channels = [channel for channel in guild.text_channels if channel.permissions_for(guild.me).send_messages]
+        
+        if text_channels:
+            channel = random.choice(text_channels)
+            await channel.send(commentary)
+            print(f"✅ Activity commentary sent for {user.display_name}")
+            
+    except Exception as e:
+        print(f"Error in activity commentary: {e}")
+
+# You can also add a manual command to trigger this
+@bot.command(name="stalk")
+async def stalk_command(ctx):
+    """Manually trigger activity commentary"""
+    try:
+        user = await get_random_user_with_activity(ctx.guild)
+        
+        if not user:
+            await ctx.send("Ga ada yang lagi doing anything interesting nih... semua pada idle 😴")
+            return
+        
+        activity_description = describe_activity(user)
+        commentary = await generate_activity_commentary(activity_description)
+        
+        await ctx.send(commentary)
+        
+    except Exception as e:
+        await ctx.send("Waduh error lagi nih, coba lagi nanti...")
+        print(f"Stalk command error: {e}")
+
+
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
