@@ -313,23 +313,51 @@ async def get_random_user_with_activity(guild):
     """Get a random user who has a current activity (game, music, etc)"""
     users_with_activities = []
     
+    print(f"🔍 Scanning {len(guild.members)} members in guild: {guild.name}")
+    
     for member in guild.members:
         # Skip bots and offline users
-        if member.bot or member.status == discord.Status.offline:
+        if member.bot:
+            print(f"  Skipping {member.display_name} (bot)")
             continue
+        
+        if member.status == discord.Status.offline:
+            print(f"  Skipping {member.display_name} (offline)")
+            continue
+        
+        print(f"  Checking {member.display_name} (status: {member.status})")
         
         # Check if user has any activities
         if member.activities:
-            for activity in member.activities:
+            print(f"    Activities found: {len(member.activities)}")
+            for i, activity in enumerate(member.activities):
+                print(f"      Activity {i+1}: {activity.name} (type: {type(activity).__name__})")
+                if hasattr(activity, 'type'):
+                    print(f"        Activity type: {activity.type}")
+                
                 # Filter out generic activities like "Custom Status"
                 if (isinstance(activity, discord.Spotify) or 
                     isinstance(activity, discord.Game) or 
                     isinstance(activity, discord.Streaming) or
                     (hasattr(activity, 'type') and activity.type != discord.ActivityType.custom)):
+                    
+                    print(f"    ✅ Valid activity found: {activity.name}")
                     users_with_activities.append(member)
                     break
+                else:
+                    print(f"    ❌ Skipping activity: {activity.name} (not interesting type)")
+        else:
+            print(f"    No activities for {member.display_name}")
     
-    return random.choice(users_with_activities) if users_with_activities else None
+    print(f"📊 Found {len(users_with_activities)} users with valid activities")
+    
+    if users_with_activities:
+        chosen_user = random.choice(users_with_activities)
+        print(f"🎯 Selected user: {chosen_user.display_name}")
+        return chosen_user
+    
+    print("❌ No users with valid activities found")
+    return None
 
 # Add this function to describe the activity
 def describe_activity(member):
@@ -404,21 +432,30 @@ async def random_activity_commentary():
 async def stalk_command(ctx):
     """Manually trigger activity commentary"""
     try:
+        print(f"🕵️ Stalk command triggered in {ctx.guild.name}")
         user = await get_random_user_with_activity(ctx.guild)
         
         if not user:
             await ctx.send("Ga ada yang lagi doing anything interesting nih... semua pada idle 😴")
             return
         
+        # Debug: Show what activities the user has
+        print(f"📋 Activities for {user.display_name}:")
+        for i, activity in enumerate(user.activities):
+            print(f"  {i+1}. {activity.name} (type: {type(activity).__name__})")
+        
         activity_description = describe_activity(user)
+        print(f"📝 Generated description: {activity_description}")
+        
         commentary = await generate_activity_commentary(activity_description)
         
         await ctx.send(commentary)
         
     except Exception as e:
         await ctx.send("Waduh error lagi nih, coba lagi nanti...")
-        print(f"Stalk command error: {e}")
-
+        print(f"❌ Stalk command error: {e}")
+        import traceback
+        traceback.print_exc()
 
 @bot.event
 async def on_message(message):
