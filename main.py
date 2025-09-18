@@ -164,6 +164,8 @@ QOTD_CHANNEL_ID = 1306689528211308575
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True 
+intents.presences = True 
 bot = commands.Bot(command_prefix="!", intents=intents)
 scheduler = AsyncIOScheduler()
 
@@ -314,6 +316,12 @@ async def get_random_user_with_activity(guild):
     users_with_activities = []
     
     print(f"🔍 Scanning {len(guild.members)} members in guild: {guild.name}")
+     try:
+        print(f"📋 Total members in cache: {len(guild.members)}")
+        # Uncomment next line if members are missing from cache
+        # await guild.chunk()  # This forces Discord to send all members
+    except Exception as e:
+        print(f"❌ Error fetching members: {e}")
     
     for member in guild.members:
         # Skip bots and offline users
