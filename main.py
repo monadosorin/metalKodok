@@ -436,7 +436,7 @@ async def random_activity_commentary():
         print(f"Error in activity commentary: {e}")
 
 # You can also add a manual command to trigger this
-@bot.command(name="stalk")
+@bot.command(name="stalk324")
 async def stalk_command(ctx):
     """Manually trigger activity commentary"""
     try:
@@ -465,6 +465,51 @@ async def stalk_command(ctx):
         import traceback
         traceback.print_exc()
 
+
+@scheduler.scheduled_job(CronTrigger(hour=19, minute=0, timezone="Asia/Jakarta"))  # 7 PM Jakarta time
+async def daily_stalk():
+    """Randomly stalk one person every day at 7 PM"""
+    try:
+        print("🕔 7 PM - Time for daily stalk!")
+
+        # Get a random guild (server) the bot is in
+        if not bot.guilds:
+            print("❌ No guilds available")
+            return
+
+        guild = random.choice(bot.guilds)
+        print(f"🎯 Selected guild: {guild.name}")
+
+        user = await get_random_user_with_activity(guild)
+
+        if not user:
+            print("❌ No users with activities found for daily stalk")
+            return
+
+        # Debug: Show what activities the user has
+        print(f"📋 Activities for {user.display_name}:")
+        for i, activity in enumerate(user.activities):
+            print(f"  {i + 1}. {activity.name} (type: {type(activity).__name__})")
+
+        activity_description = describe_activity(user)
+        print(f"📝 Generated description: {activity_description}")
+
+        commentary = await generate_activity_commentary(activity_description)
+
+        # Send to a specific channel or random channel
+        TARGET_CHANNEL_ID = 1333665831200100353  # Replace with your desired channel ID
+        target_channel = bot.get_channel(TARGET_CHANNEL_ID)
+
+        if target_channel:
+            await target_channel.send(commentary)
+            print(f"✅ Daily stalk completed for {user.display_name}")
+        else:
+            print(f"❌ Could not find target channel {TARGET_CHANNEL_ID}")
+
+    except Exception as e:
+        print(f"❌ Daily stalk error: {e}")
+        import traceback
+        traceback.print_exc()
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
