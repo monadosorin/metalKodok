@@ -148,12 +148,16 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 async def init_db():
     """Initialize the database connection with connection pooling"""
     try:
-        return await asyncpg.create_pool(
+        pool = await asyncpg.create_pool(
             DATABASE_URL,
             min_size=1,
             max_size=5,
             command_timeout=60
         )
+        # Test the connection
+        async with pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        return pool
     except Exception as e:
         print(f"Error connecting to the database: {e}")
         return None
@@ -174,6 +178,10 @@ coordinates = {}
 
 async def get_qotd():
     """Fetch the next question from the database."""
+
+    if db_pool is None:
+        return "Database not connected yet. Please try again in a moment."
+
     async with db_pool.acquire() as conn:
         question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
         if question:
@@ -286,12 +294,28 @@ async def handle_command_error(message):
 @bot.event
 async def on_ready():
     global db_pool, message_processor_task
-    if db_pool is None:
-        db_pool = await init_db()
-    if db_pool:
-        print("Database connected.")
-        scheduler.start()
-  
+
+    # Try to initialize database with retries
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if db_pool is None:
+                db_pool = await init_db()
+
+            if db_pool:
+                print("Database connected.")
+                scheduler.start()
+                break
+            else:
+                print(f"Database connection failed (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(5)  # Wait before retrying
+        except Exception as e:
+            print(f"Database connection error: {e}")
+            if attempt == max_retries - 1:
+                print("Failed to connect to database after multiple attempts")
+            else:
+                await asyncio.sleep(5)
+
     message_processor_task = asyncio.create_task(message_processor())
     print(f"Logged in as {bot.user}")
 
@@ -299,10 +323,15 @@ async def on_ready():
 @scheduler.scheduled_job("interval", minutes=5)
 async def clear_sessions_task():
     await clear_expired_sessions()
-    
+
+
 @bot.command(name="question")
 async def test_qotd(ctx):
     """Test the Question of the Day manually"""
+    if db_pool is None:
+        await ctx.send("Database not connected yet. Please try again in a moment.")
+        return
+
     question = await get_qotd()
     if question:
         await ctx.send(f"**Kodok Kuestion of the day (Test):** {question}")
