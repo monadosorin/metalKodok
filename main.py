@@ -420,7 +420,7 @@ def describe_activity(member):
     return f"{member.display_name} is {', and '.join(activities_info)}"
 
 # Add this function to generate commentary
-async def generate_activity_commentary(activity_description):
+async def generate_activity_commentary(activity_description, user):
     """Generate witty commentary about the user's activity"""
     prompt = f"A user is {activity_description}. Generate a short, witty but lighthearted commentary in Indonesian mixed with English. Show curiosity - ask what song they're listening to, why they like it, or what their game is about. Keep it under 2 sentences and make it playful, not mean."
 
@@ -433,68 +433,72 @@ async def generate_activity_commentary(activity_description):
             ],
             stream=False
         )
-        return response.choices[0].message.content.strip()
+        # Add user mention to the response
+        return f"{user.mention} {response.choices[0].message.content.strip()}"
     except Exception as e:
-        return f"Waduh, liat nih orang {activity_description}... interesting choice! 🐸"
+        return f"{user.mention} Waduh, liat nih orang {activity_description}... interesting choice! 🐸"
 
 # Add this scheduled job (example: runs every 2 hours)
 
 TARGET_CHANNEL_ID = 1333665831200100353
+
+
 @scheduler.scheduled_job(CronTrigger(hour='*/2', minute=0, timezone="Asia/Jakarta"))
 async def random_activity_commentary():
     try:
         if not bot.guilds:
             return
-        
+
         guild = random.choice(bot.guilds)
         user = await get_random_user_with_activity(guild)
-        
+
         if not user:
             return
-        
+
         activity_description = describe_activity(user)
-        commentary = await generate_activity_commentary(activity_description)
-        
+        # Pass the user to the commentary function
+        commentary = await generate_activity_commentary(activity_description, user)
+
         # Send to specific channel
         target_channel = bot.get_channel(TARGET_CHANNEL_ID)
         if target_channel:
             await target_channel.send(commentary)
             print(f"✅ Activity commentary sent for {user.display_name}")
-            
+
     except Exception as e:
         print(f"Error in activity commentary: {e}")
 
-# You can also add a manual command to trigger this
 @bot.command(name="stalk324")
 async def stalk_command(ctx):
     """Manually trigger activity commentary"""
     try:
         print(f"🕵️ Stalk command triggered in {ctx.guild.name}")
         user = await get_random_user_with_activity(ctx.guild)
-        
+
         if not user:
             await ctx.send("Ga ada yang lagi doing anything interesting nih... semua pada idle 😴")
             return
-        
+
         # Debug: Show what activities the user has
         print(f"📋 Activities for {user.display_name}:")
         for i, activity in enumerate(user.activities):
-            print(f"  {i+1}. {activity.name} (type: {type(activity).__name__})")
-        
+            print(f"  {i + 1}. {activity.name} (type: {type(activity).__name__})")
+
         activity_description = describe_activity(user)
         print(f"📝 Generated description: {activity_description}")
-        
-        commentary = await generate_activity_commentary(activity_description)
-        
+
+        # Pass the user to the commentary function
+        commentary = await generate_activity_commentary(activity_description, user)
+
         await ctx.send(commentary)
-        
+
     except Exception as e:
         await ctx.send("Waduh error lagi nih, coba lagi nanti...")
         print(f"❌ Stalk command error: {e}")
         import traceback
         traceback.print_exc()
 
-
+# Update the daily_stalk function to pass the user to generate_activity_commentary
 @scheduler.scheduled_job(CronTrigger(hour=19, minute=0, timezone="Asia/Jakarta"))  # 7 PM Jakarta time
 async def daily_stalk():
     """Randomly stalk one person every day at 7 PM"""
@@ -523,7 +527,8 @@ async def daily_stalk():
         activity_description = describe_activity(user)
         print(f"📝 Generated description: {activity_description}")
 
-        commentary = await generate_activity_commentary(activity_description)
+        # Pass the user to the commentary function
+        commentary = await generate_activity_commentary(activity_description, user)
 
         # Send to a specific channel or random channel
         TARGET_CHANNEL_ID = 1333665831200100353  # Replace with your desired channel ID
