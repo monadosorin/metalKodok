@@ -343,67 +343,66 @@ async def test_qotd(ctx):
 async def get_random_user_with_activity(guild):
     """Get a random user who has a current activity (game, music, etc)"""
     users_with_activities = []
-    
+
     print(f"🔍 Scanning {len(guild.members)} members in guild: {guild.name}")
-    try:
-        print(f"📋 Total members in cache: {len(guild.members)}")
-        # Uncomment next line if members are missing from cache
-        # await guild.chunk()  # This forces Discord to send all members
-    except Exception as e:
-        print(f"❌ Error fetching members: {e}")
-    
+
     for member in guild.members:
         # Skip bots and offline users
         if member.bot:
-            print(f"  Skipping {member.display_name} (bot)")
             continue
-        
+
         if member.status == discord.Status.offline:
-            print(f"  Skipping {member.display_name} (offline)")
             continue
-        
-        print(f"  Checking {member.display_name} (status: {member.status})")
-        
+
         # Check if user has any activities
         if member.activities:
-            print(f"    Activities found: {len(member.activities)}")
-            for i, activity in enumerate(member.activities):
-                print(f"      Activity {i+1}: {activity.name} (type: {type(activity).__name__})")
-                if hasattr(activity, 'type'):
-                    print(f"        Activity type: {activity.type}")
-                
-                # Filter out generic activities like "Custom Status"
-                if (isinstance(activity, discord.Spotify) or 
-                    isinstance(activity, discord.Game) or 
-                    isinstance(activity, discord.Streaming) or
-                    (hasattr(activity, 'type') and activity.type != discord.ActivityType.custom)):
-                    
-                    print(f"    ✅ Valid activity found: {activity.name}")
-                    users_with_activities.append(member)
+            valid_activity_found = False
+
+            for activity in member.activities:
+                # Filter out custom statuses and focus on meaningful activities
+                if (isinstance(activity, discord.Spotify) or
+                        isinstance(activity, discord.Game) or
+                        isinstance(activity, discord.Streaming) or
+                        (hasattr(activity, 'type') and
+                         activity.type in [discord.ActivityType.playing,
+                                           discord.ActivityType.listening,
+                                           discord.ActivityType.streaming,
+                                           discord.ActivityType.watching])):
+
+                    # Additional filtering for custom statuses
+                    if (isinstance(activity, discord.CustomActivity) or
+                            (hasattr(activity, 'type') and activity.type == discord.ActivityType.custom)):
+                        continue  # Skip custom statuses
+
+                    valid_activity_found = True
                     break
-                else:
-                    print(f"    ❌ Skipping activity: {activity.name} (not interesting type)")
-        else:
-            print(f"    No activities for {member.display_name}")
-    
+
+            if valid_activity_found:
+                users_with_activities.append(member)
+
     print(f"📊 Found {len(users_with_activities)} users with valid activities")
-    
+
     if users_with_activities:
         chosen_user = random.choice(users_with_activities)
         print(f"🎯 Selected user: {chosen_user.display_name}")
         return chosen_user
-    
+
     print("❌ No users with valid activities found")
     return None
 
 # Add this function to describe the activity
 def describe_activity(member):
-    """Generate a description of the user's activities"""
+    """Generate a description of the user's activities, excluding custom statuses"""
     if not member.activities:
         return f"{member.display_name} is doing nothing interesting"
-    
+
     activities_info = []
     for activity in member.activities:
+        # Skip custom statuses
+        if (isinstance(activity, discord.CustomActivity) or
+                (hasattr(activity, 'type') and activity.type == discord.ActivityType.custom)):
+            continue
+
         if isinstance(activity, discord.Spotify):
             activities_info.append(f"listening to {activity.title} by {activity.artist}")
         elif isinstance(activity, discord.Game):
@@ -414,9 +413,13 @@ def describe_activity(member):
             activities_info.append(f"watching {activity.name}")
         elif activity.type == discord.ActivityType.listening:
             activities_info.append(f"listening to {activity.name}")
-        else:
-            activities_info.append(f"doing {activity.name}")
-    
+        elif activity.type == discord.ActivityType.playing:
+            activities_info.append(f"playing {activity.name}")
+        # Skip any other activities that might be custom statuses
+
+    if not activities_info:
+        return f"{member.display_name} is doing nothing interesting"
+
     return f"{member.display_name} is {', and '.join(activities_info)}"
 
 # Add this function to generate commentary
