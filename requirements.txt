@@ -6,5 +6,6 @@ asyncpg
 openai>=1.0.0
 gTTS
 PyNaCl
+pydub
 
 

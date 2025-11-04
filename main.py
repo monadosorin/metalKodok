@@ -16,6 +16,9 @@ from apscheduler.triggers.cron import CronTrigger
 from gtts import gTTS
 import tempfile
 import time
+import subprocess
+from pydub import AudioSegment
+
 
 active_tts_user = None
 last_tts_activity = 0
@@ -644,21 +647,37 @@ async def on_message(message):
             while tts_voice_client.is_playing():
                 await asyncio.sleep(0.5)
 
+            print("Generating TTS audio...")
             tts = gTTS(text=message.content, lang="id")
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
-                tts.save(fp.name)
-                print(f"TTS audio file saved: {fp.name}")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_fp:
+                tts.save(mp3_fp.name)
+                print(f"TTS MP3 saved: {mp3_fp.name}")
 
-            # Check if FFmpeg exists and log playback attempt
-            print("Attempting to play audio through FFmpeg...")
+            # Convert MP3 to WAV (raw PCM) so FFmpeg doesn’t need mp3 codecs
+            wav_path = mp3_fp.name.replace(".mp3", ".wav")
+            AudioSegment.from_file(mp3_fp.name, format="mp3").export(wav_path, format="wav")
+            print(f"Converted to WAV: {wav_path}")
+
+            # Play the WAV file
             ffmpeg_options = {
                 "before_options": "-nostdin",
-                "options": "-vn -loglevel panic"
+                "options": "-f s16le -ar 48000 -ac 2 -vn -loglevel panic"
             }
-            audio_source = discord.FFmpegPCMAudio(fp.name, **ffmpeg_options)
+            audio_source = discord.PCMVolumeTransformer(
+                discord.FFmpegPCMAudio(wav_path, **ffmpeg_options)
+            )
+            audio_source.volume = 1.0
             tts_voice_client.play(audio_source)
             print("Playback started!")
+
+            # Wait until finished
+            while tts_voice_client.is_playing():
+                await asyncio.sleep(0.5)
+
+            print("Playback finished.")
+            os.remove(mp3_fp.name)
+            os.remove(wav_path)
 
             last_tts_activity = time.time()
 
