@@ -634,7 +634,10 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-        # 🔊 Check for TTS reading
+        # 🔥 ADD THIS: Skip command processing in the custom message handler
+    if message.content.startswith(bot.command_prefix):
+        await bot.process_commands(message)
+        return
     # Play the WAV file
     ffmpeg_options = {
         "before_options": "-nostdin",
