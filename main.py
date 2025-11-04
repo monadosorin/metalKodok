@@ -348,14 +348,30 @@ async def test_qotd(ctx):
 
 @bot.command(name="joinvc")
 async def join_vc(ctx):
-    """Join the voice channel of the command sender."""
+    """Join or move to the user's voice channel."""
     global tts_voice_client
-    if ctx.author.voice:
-        channel = ctx.author.voice.channel
-        tts_voice_client = await channel.connect()
-        await ctx.send(f"🐸 Joined {channel.name} and ready to speak!")
-    else:
+
+    if not ctx.author.voice:
         await ctx.send("You’re not in a voice channel, bruh.")
+        return
+
+    channel = ctx.author.voice.channel
+
+    # If already connected, move instead of reconnecting
+    if ctx.voice_client:
+        if ctx.voice_client.channel == channel:
+            await ctx.send(f"Already in {channel.name}, chill 😎")
+            return
+        else:
+            await ctx.voice_client.move_to(channel)
+            tts_voice_client = ctx.voice_client
+            await ctx.send(f"Moved to {channel.name} 🐸")
+            return
+
+    # Otherwise, connect normally
+    tts_voice_client = await channel.connect()
+    await ctx.send(f"🐸 Joined {channel.name} and ready to speak!")
+
 
 @bot.command(name="starttts")
 async def start_tts(ctx, member: discord.Member):
@@ -623,13 +639,17 @@ async def on_message(message):
             and tts_voice_client
     ):
         try:
-            tts = gTTS(text=message.content, lang="id")  # or "en" for English
+            # Wait until the bot isn't speaking before starting the next TTS
+            while tts_voice_client.is_playing():
+                await asyncio.sleep(0.5)
+
+            tts = gTTS(text=message.content, lang="id")
             with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
                 tts.save(fp.name)
                 audio_source = discord.FFmpegPCMAudio(fp.name)
-                if not tts_voice_client.is_playing():
-                    tts_voice_client.play(audio_source)
+                tts_voice_client.play(audio_source)
             last_tts_activity = time.time()
+
         except Exception as e:
             print(f"TTS error: {e}")
 
