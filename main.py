@@ -408,6 +408,39 @@ async def stop_tts(ctx):
         await ctx.send("I'm not connected to any voice channel.")
 
 
+@bot.command(name="testaudio")
+async def test_audio(ctx):
+    """Test basic audio playback"""
+    if not ctx.author.voice:
+        await ctx.send("Join a voice channel first!")
+        return
+
+    # Join VC if not already connected
+    if not ctx.voice_client:
+        await ctx.author.voice.channel.connect()
+
+    # Create a simple test file
+    try:
+        tts = gTTS(text="This is a test message", lang="en")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+            temp_path = temp_file.name
+        tts.save(temp_path)
+
+        # Try minimal playback
+        ctx.voice_client.play(
+            discord.FFmpegPCMAudio(temp_path),
+            after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
+        )
+
+        await ctx.send("Playing test audio...")
+
+    except Exception as e:
+        await ctx.send(f"Error: {e}")
+        if 'temp_path' in locals():
+            try:
+                os.remove(temp_path)
+            except:
+                pass
 # Add this function to get a random user with an activity
 async def get_random_user_with_activity(guild):
     """Get a random user who has a current activity (game, music, etc)"""
@@ -659,7 +692,7 @@ async def on_message(message):
         return
         # 🔊 TTS functionality
     if (active_tts_user == message.author.id and
-            message.channel.name == "vc-chat" and  # Adjust channel name as needed
+            message.channel.name == "vc-chat" and
             tts_voice_client and
             tts_voice_client.is_connected() and
             not tts_voice_client.is_playing()):
@@ -679,34 +712,19 @@ async def on_message(message):
             tts.save(temp_path)
             print(f"TTS saved to: {temp_path}")
 
-            # Use proper FFmpeg options for MP3
-            ffmpeg_options = {
-                "before_options": "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-                "options": "-vn -af volume=0.8 -loglevel warning"
-            }
+            # MINIMAL approach - no FFmpeg options
+            audio_source = discord.FFmpegPCMAudio(temp_path)
 
-            # Create audio source with error handling
-            try:
-                audio_source = discord.FFmpegPCMAudio(
-                    temp_path,
-                    **ffmpeg_options
-                )
+            # Play audio
+            tts_voice_client.play(
+                audio_source,
+                after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
+            )
 
-                # Play audio
-                tts_voice_client.play(
-                    audio_source,
-                    after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
-                )
-
-                print("TTS playback started successfully!")
-
-            except Exception as play_error:
-                print(f"Error creating audio source: {play_error}")
-                await cleanup_tts_file(temp_path, play_error)
+            print("TTS playback started successfully!")
 
         except Exception as e:
             print(f"Error in TTS processing: {e}")
-            # Clean up temp file if it exists
             if 'temp_path' in locals() and os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
