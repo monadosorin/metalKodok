@@ -639,16 +639,31 @@ async def on_message(message):
             and tts_voice_client
     ):
         try:
+            print(f"TTS triggered for: {message.content}")
             # Wait until the bot isn't speaking before starting the next TTS
             while tts_voice_client.is_playing():
                 await asyncio.sleep(0.5)
 
             tts = gTTS(text=message.content, lang="id")
-            with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as fp:
                 tts.save(fp.name)
-                audio_source = discord.FFmpegPCMAudio(fp.name)
-                tts_voice_client.play(audio_source)
+                print(f"TTS audio file saved: {fp.name}")
+
+            # Check if FFmpeg exists and log playback attempt
+            print("Attempting to play audio through FFmpeg...")
+            audio_source = discord.FFmpegPCMAudio(fp.name)
+            tts_voice_client.play(audio_source)
+            print("Playback started!")
+
             last_tts_activity = time.time()
+
+            # Wait until the playback ends
+            while tts_voice_client.is_playing():
+                await asyncio.sleep(0.5)
+
+            print("Playback finished.")
+            os.remove(fp.name)
 
         except Exception as e:
             print(f"TTS error: {e}")
