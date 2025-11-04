@@ -642,6 +642,23 @@ async def on_message(message):
     }
 
     try:
+        print("Generating TTS audio...")
+        tts = gTTS(text=message.content, lang="id")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_fp:
+            tts.save(mp3_fp.name)
+            print(f"TTS MP3 saved: {mp3_fp.name}")
+
+            # Convert MP3 to WAV (raw PCM) so FFmpeg doesn’t need mp3 codecs
+            wav_path = mp3_fp.name.replace(".mp3", ".wav")
+            AudioSegment.from_file(mp3_fp.name, format="mp3").export(wav_path, format="wav")
+            print(f"Converted to WAV: {wav_path}")
+
+        # Play the WAV file
+        ffmpeg_options = {
+            "before_options": "-nostdin",
+            "options": "-f s16le -ar 48000 -ac 2 -vn -loglevel panic"
+        }
         audio_source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(wav_path, **ffmpeg_options)
         )
@@ -656,7 +673,7 @@ async def on_message(message):
 
         print("Playback finished.")
 
-        # Ensure cleanup of temporary files
+        # Clean up temporary files
         os.remove(mp3_fp.name)
         os.remove(wav_path)
 
@@ -669,7 +686,6 @@ async def on_message(message):
             tts_voice_client.stop()
             print("Stopped playback due to an error or completion.")
 
-        # Continue to your normal message handling
     await bot.process_commands(message)
     history_key = await get_history_key(message)
 
