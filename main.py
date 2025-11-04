@@ -652,18 +652,14 @@ async def on_message(message):
             tts.save(mp3_fp.name)
             print(f"TTS MP3 saved: {mp3_fp.name}")
 
-            # Convert MP3 to WAV (raw PCM) so FFmpeg doesn’t need mp3 codecs
-            wav_path = mp3_fp.name.replace(".mp3", ".wav")
-            AudioSegment.from_file(mp3_fp.name, format="mp3").export(wav_path, format="wav")
-            print(f"Converted to WAV: {wav_path}")
-
-        # Play the WAV file
+        # Use MP3 directly with proper options
         ffmpeg_options = {
             "before_options": "-nostdin",
-            "options": "-f s16le -ar 48000 -ac 2 -vn -loglevel panic"
+            "options": "-vn -loglevel panic"
         }
+
         audio_source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(wav_path, **ffmpeg_options)
+            discord.FFmpegPCMAudio(mp3_fp.name, **ffmpeg_options)
         )
         audio_source.volume = 1.0
         tts_voice_client.play(audio_source)
@@ -676,15 +672,14 @@ async def on_message(message):
 
         print("Playback finished.")
 
-        # Clean up temporary files
+        # Clean up temporary file
         os.remove(mp3_fp.name)
-        os.remove(wav_path)
 
     except Exception as e:
         print(f"Error playing TTS audio: {e}")
 
     finally:
-        # Ensure no hanging processes, attempt to disconnect cleanly
+        # Ensure no hanging processes
         if tts_voice_client and tts_voice_client.is_playing():
             tts_voice_client.stop()
             print("Stopped playback due to an error or completion.")
