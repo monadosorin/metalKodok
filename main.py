@@ -13,6 +13,14 @@ import asyncio
 from collections import defaultdict
 from discord import HTTPException
 from apscheduler.triggers.cron import CronTrigger
+from gtts import gTTS
+import tempfile
+import time
+
+active_tts_user = None
+last_tts_activity = 0
+tts_voice_client = None
+
 
 conversation_histories = defaultdict(list)
 MAX_HISTORY = 5 
@@ -338,6 +346,44 @@ async def test_qotd(ctx):
     else:
         await ctx.send("No more questions left in the database, bro 😭")
 
+@bot.command(name="joinvc")
+async def join_vc(ctx):
+    """Join the voice channel of the command sender."""
+    global tts_voice_client
+    if ctx.author.voice:
+        channel = ctx.author.voice.channel
+        tts_voice_client = await channel.connect()
+        await ctx.send(f"🐸 Joined {channel.name} and ready to speak!")
+    else:
+        await ctx.send("You’re not in a voice channel, bruh.")
+
+@bot.command(name="starttts")
+async def start_tts(ctx, member: discord.Member):
+    """Start reading messages from the specified user in #vc-chat."""
+    global active_tts_user, last_tts_activity
+
+    if not ctx.voice_client:
+        await ctx.send("I'm not in a voice channel! Use `!joinvc` first.")
+        return
+
+    active_tts_user = member.id
+    last_tts_activity = time.time()
+    await ctx.send(f"🐸 Started reading messages from {member.display_name} in #vc-chat.")
+
+@bot.command(name="stoptts")
+async def stop_tts(ctx):
+    """Stop reading messages and leave VC."""
+    global active_tts_user, tts_voice_client
+
+    active_tts_user = None
+
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
+        tts_voice_client = None
+        await ctx.send("🕳️ Left the VC and stopped TTS.")
+    else:
+        await ctx.send("I'm not connected to any voice channel.")
+
 
 # Add this function to get a random user with an activity
 async def get_random_user_with_activity(guild):
@@ -547,12 +593,48 @@ async def daily_stalk():
         print(f"❌ Daily stalk error: {e}")
         import traceback
         traceback.print_exc()
+
+@scheduler.scheduled_job("interval", minutes=1)
+async def tts_inactivity_check():
+    global last_tts_activity, tts_voice_client, active_tts_user
+
+    if tts_voice_client and active_tts_user:
+        if time.time() - last_tts_activity > 15 * 60:  # 15 minutes
+            try:
+                await tts_voice_client.disconnect()
+                print("🕒 Auto-disconnected from VC due to inactivity.")
+            except Exception as e:
+                print(f"Error disconnecting TTS VC: {e}")
+            finally:
+                tts_voice_client = None
+                active_tts_user = None
+
 @bot.event
 async def on_message(message):
+    global active_tts_user, last_tts_activity, tts_voice_client
     if message.author == bot.user:
         return
 
-      
+        # 🔊 Check for TTS reading
+    if (
+            active_tts_user
+            and message.channel.name == "vc-chat"
+            and message.author.id == active_tts_user
+            and tts_voice_client
+    ):
+        try:
+            tts = gTTS(text=message.content, lang="id")  # or "en" for English
+            with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
+                tts.save(fp.name)
+                audio_source = discord.FFmpegPCMAudio(fp.name)
+                if not tts_voice_client.is_playing():
+                    tts_voice_client.play(audio_source)
+            last_tts_activity = time.time()
+        except Exception as e:
+            print(f"TTS error: {e}")
+
+        # Continue to your normal message handling
+    await bot.process_commands(message)
     history_key = await get_history_key(message)
 
   
