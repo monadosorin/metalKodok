@@ -276,6 +276,46 @@ async def send_qotd():
     except Exception as e:
         print(f"Error in QOTD: {e}")
 
+async def reconnect_database():
+    """Reinitialize database connection"""
+    global db_pool
+    try:
+        if db_pool:
+            await db_pool.close()
+        db_pool = await init_db()
+        if db_pool:
+            print("✅ Database reconnected successfully")
+            return True
+        else:
+            print("❌ Failed to reconnect to database")
+            return False
+    except Exception as e:
+        print(f"❌ Database reconnection error: {e}")
+        return False
+
+@scheduler.scheduled_job(CronTrigger(hour=11, minute=55, timezone="Asia/Jakarta"))  # 10 minutes before QOTD
+async def wake_database_before_qotd():
+    """Wake up the database before QOTD runs"""
+    print("🔄 Waking up database for QOTD...")
+
+    if db_pool:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            print("✅ Database is awake and ready for QOTD")
+        except Exception as e:
+            print(f"❌ Database wake-up failed: {e}")
+            await reconnect_database()
+    else:
+        print("❌ No database connection, attempting to reconnect...")
+        await reconnect_database()
+
+
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=0, timezone="Asia/Jakarta"))
+async def scheduled_qotd():
+    """Scheduled QOTD task that runs after database is awake"""
+    print("✅ Running QOTD with awake database...")
+    await send_qotd()
 
 @scheduler.scheduled_job(CronTrigger(hour=12, minute=0, timezone="Asia/Jakarta"))
 async def scheduled_qotd():
