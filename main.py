@@ -652,7 +652,11 @@ async def on_message(message):
 
             # Check if FFmpeg exists and log playback attempt
             print("Attempting to play audio through FFmpeg...")
-            audio_source = discord.FFmpegPCMAudio(fp.name)
+            ffmpeg_options = {
+                "before_options": "-nostdin",
+                "options": "-vn -loglevel panic"
+            }
+            audio_source = discord.FFmpegPCMAudio(fp.name, **ffmpeg_options)
             tts_voice_client.play(audio_source)
             print("Playback started!")
 
