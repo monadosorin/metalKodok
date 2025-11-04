@@ -381,9 +381,13 @@ async def start_tts(ctx, member: discord.Member):
     """Start reading messages from the specified user in #vc-chat."""
     global active_tts_user, last_tts_activity
 
-    if not ctx.voice_client:
-        await ctx.send("I'm not in a voice channel! Use `!joinvc` first.")
+    # Ensure we're in a voice channel
+    if not ctx.author.voice:
+        await ctx.send("You need to be in a voice channel first!")
         return
+
+    if not ctx.voice_client:
+        await ctx.author.voice.channel.connect()
 
     active_tts_user = member.id
     last_tts_activity = time.time()
@@ -613,6 +617,21 @@ async def daily_stalk():
         import traceback
         traceback.print_exc()
 
+
+async def cleanup_tts_file(file_path, error=None):
+    """Clean up temporary TTS files after playback"""
+    if error:
+        print(f"TTS playback error: {error}")
+
+    # Wait a bit then clean up
+    await asyncio.sleep(1)
+
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Cleaned up TTS file: {file_path}")
+    except Exception as e:
+        print(f"Error cleaning up TTS file: {e}")
 @scheduler.scheduled_job("interval", minutes=1)
 async def tts_inactivity_check():
     global last_tts_activity, tts_voice_client, active_tts_user
@@ -638,53 +657,61 @@ async def on_message(message):
     if message.content.startswith(bot.command_prefix):
         await bot.process_commands(message)
         return
-    # Play the WAV file
-    ffmpeg_options = {
-        "before_options": "-nostdin",
-        "options": "-f s16le -ar 48000 -ac 2 -vn -loglevel panic"
-    }
+        # 🔊 TTS functionality
+    if (active_tts_user == message.author.id and
+            message.channel.name == "vc-chat" and  # Adjust channel name as needed
+            tts_voice_client and
+            tts_voice_client.is_connected() and
+            not tts_voice_client.is_playing()):
 
-    try:
-        print("Generating TTS audio...")
-        tts = gTTS(text=message.content, lang="id")
+        last_tts_activity = time.time()
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as mp3_fp:
-            tts.save(mp3_fp.name)
-            print(f"TTS MP3 saved: {mp3_fp.name}")
+        try:
+            print(f"Generating TTS audio for: {message.content}")
 
-        # Use MP3 directly with proper options
-        ffmpeg_options = {
-            "before_options": "-nostdin",
-            "options": "-vn -loglevel panic"
-        }
+            # Generate TTS
+            tts = gTTS(text=message.content, lang="id")
 
-        audio_source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(mp3_fp.name, **ffmpeg_options)
-        )
-        audio_source.volume = 1.0
-        tts_voice_client.play(audio_source)
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+                temp_path = temp_file.name
 
-        print("Playback started!")
+            tts.save(temp_path)
+            print(f"TTS saved to: {temp_path}")
 
-        # Wait until finished
-        while tts_voice_client.is_playing():
-            await asyncio.sleep(0.5)
+            # Use proper FFmpeg options for MP3
+            ffmpeg_options = {
+                "before_options": "-nostdin -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+                "options": "-vn -af volume=0.8 -loglevel warning"
+            }
 
-        print("Playback finished.")
+            # Create audio source with error handling
+            try:
+                audio_source = discord.FFmpegPCMAudio(
+                    temp_path,
+                    **ffmpeg_options
+                )
 
-        # Clean up temporary file
-        os.remove(mp3_fp.name)
+                # Play audio
+                tts_voice_client.play(
+                    audio_source,
+                    after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
+                )
 
-    except Exception as e:
-        print(f"Error playing TTS audio: {e}")
+                print("TTS playback started successfully!")
 
-    finally:
-        # Ensure no hanging processes
-        if tts_voice_client and tts_voice_client.is_playing():
-            tts_voice_client.stop()
-            print("Stopped playback due to an error or completion.")
+            except Exception as play_error:
+                print(f"Error creating audio source: {play_error}")
+                await cleanup_tts_file(temp_path, play_error)
 
-    await bot.process_commands(message)
+        except Exception as e:
+            print(f"Error in TTS processing: {e}")
+            # Clean up temp file if it exists
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
     history_key = await get_history_key(message)
 
   
