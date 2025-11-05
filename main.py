@@ -59,17 +59,21 @@ Keep your responses short, to the point, and engaging. You balance humor with su
 """
 
 async def handle_ping(request):
-    try:
-        print("[PING] External ping received, waking DB...")
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("SELECT 1;")  # wake DB
-        await conn.close()
-        print("[PING] DB wake successful.")
-        return web.Response(text="pong")
-    except Exception as e:
-        print(f"[PING] Failed: {e}")
-        return web.Response(text=f"error: {e}", status=500)
+    print("[PING] External ping received, waking DB...")
 
+    for attempt in range(5):  # try 5 times
+        try:
+            conn = await asyncpg.connect(DATABASE_URL)
+            await conn.execute("SELECT 1;")
+            await conn.close()
+            print(f"[PING] DB wake successful on attempt {attempt+1}")
+            return web.Response(text="pong")
+        except Exception as e:
+            print(f"[PING] Attempt {attempt+1} failed: {e}")
+            await asyncio.sleep(3)  # wait 3 seconds before retry
+
+    print("[PING] Failed to wake DB after 5 attempts")
+    return web.Response(text="error: database still asleep", status=500)
 async def start_ping_server():
     app = web.Application()
     app.router.add_get("/ping", handle_ping)
@@ -387,7 +391,7 @@ async def handle_command_error(message):
 async def on_ready():
     print("Bot is online.")
     bot.loop.create_task(start_ping_server())
-    
+
     global db_pool, message_processor_task
 
     # Try to initialize database with retries
