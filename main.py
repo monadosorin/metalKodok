@@ -18,6 +18,8 @@ import tempfile
 import time
 import subprocess
 from pydub import AudioSegment
+from aiohttp import web
+import asyncio, asyncpg
 
 
 active_tts_user = None
@@ -56,6 +58,27 @@ You’re confident but not overbearing, and you know how to keep the vibe casual
 Keep your responses short, to the point, and engaging. You balance humor with subtlety, making sure everyone in the conversation feels included without focusing too much on any one person.
 """
 
+async def handle_ping(request):
+    try:
+        print("[PING] External ping received, waking DB...")
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("SELECT 1;")  # wake DB
+        await conn.close()
+        print("[PING] DB wake successful.")
+        return web.Response(text="pong")
+    except Exception as e:
+        print(f"[PING] Failed: {e}")
+        return web.Response(text=f"error: {e}", status=500)
+
+async def start_ping_server():
+    app = web.Application()
+    app.router.add_get("/ping", handle_ping)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)  # Railway defaults to 8080
+    await site.start()
+    print("[PING] Ping server started on port 8080")
 
 async def get_history_key(message):
     """Create a unique key for conversation tracking (user + channel)"""
@@ -188,25 +211,22 @@ coordinates = {}
 
 
 async def get_qotd():
-    """Fetch the next question from the database."""
-
-    if db_pool is None:
-        return "Database not connected yet. Please try again in a moment."
-
-    async with db_pool.acquire() as conn:
-        question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
-        if question:
-           
-            await conn.execute(
-                "INSERT INTO used_questions (question_id) VALUES ($1)", question["id"]
-            )
-           
-            await conn.execute(
-                "DELETE FROM questions WHERE id = $1", question["id"]
-            )
-            return question["question"]
+    if not await ensure_db_pool():
+        # return None and let caller send a fallback message or retry later
         return None
-
+    try:
+        async with db_pool.acquire() as conn:
+            question = await conn.fetchrow("SELECT id, question FROM questions LIMIT 1")
+            if question:
+                await conn.execute("INSERT INTO used_questions (question_id) VALUES ($1)", question["id"])
+                await conn.execute("DELETE FROM questions WHERE id = $1", question["id"])
+                return question["question"]
+            return None
+    except Exception as e:
+        print(f"get_qotd DB error: {e}")
+        # attempt reconnect once
+        await reconnect_database()
+        return None
 
 async def add_coordinate(name, x, z):
     """Add a coordinate to the database."""
@@ -229,6 +249,32 @@ async def list_coordinates():
         rows = await conn.fetch("SELECT name, x, z FROM coordinates")
         return [{"name": row["name"], "x": row["x"], "z": row["z"]} for row in rows]
 
+# place near your db helpers
+async def ensure_db_pool(retries=6, base_delay=1):
+    global db_pool
+    for attempt in range(retries):
+        try:
+            if db_pool:
+                # quick health check
+                try:
+                    async with db_pool.acquire() as conn:
+                        await conn.execute("SELECT 1")
+                        return True
+                except Exception:
+                    # broken pool — close and reinit
+                    try:
+                        await db_pool.close()
+                    except Exception:
+                        pass
+                    db_pool = None
+
+            db_pool = await init_db()
+            if db_pool:
+                return True
+        except Exception as e:
+            print(f"DB ensure attempt {attempt+1} failed: {e}")
+        await asyncio.sleep(base_delay * (2 ** attempt))  # exponential backoff
+    return False
 
 def load_coordinates():
     """Load coordinates from a JSON file."""
@@ -262,8 +308,10 @@ def save_qotd(qotd_list, used_qotd_list):
 
 
 async def send_qotd():
-    """Send the Question of the Day."""
     try:
+        if not await ensure_db_pool():
+            print("DB not available for QOTD")
+            return
         question = await get_qotd()
         channel = bot.get_channel(QOTD_CHANNEL_ID)
         if not channel:
@@ -274,24 +322,24 @@ async def send_qotd():
         else:
             await channel.send("question e habis bolo, tolong suruh sorin buat refill lol")
     except Exception as e:
-        print(f"Error in QOTD: {e}")
+        print(f"Error in send_qotd: {e}")
+        await reconnect_database()
 
-async def reconnect_database():
-    """Reinitialize database connection"""
+async def reconnect_database(retries=4):
     global db_pool
-    try:
-        if db_pool:
-            await db_pool.close()
-        db_pool = await init_db()
-        if db_pool:
-            print("✅ Database reconnected successfully")
-            return True
-        else:
-            print("❌ Failed to reconnect to database")
-            return False
-    except Exception as e:
-        print(f"❌ Database reconnection error: {e}")
-        return False
+    for i in range(retries):
+        try:
+            if db_pool:
+                await db_pool.close()
+            db_pool = await init_db()
+            if db_pool:
+                print("✅ Database reconnected successfully")
+                return True
+        except Exception as e:
+            print(f"Reconnect attempt {i+1} failed: {e}")
+            await asyncio.sleep(2 ** i)
+    print("❌ Failed to reconnect to database after retries")
+    return False
 
 @scheduler.scheduled_job(CronTrigger(hour=11, minute=55, timezone="Asia/Jakarta"))  # 10 minutes before QOTD
 async def wake_database_before_qotd():
@@ -317,13 +365,6 @@ async def scheduled_qotd():
     print("✅ Running QOTD with awake database...")
     await send_qotd()
 
-@scheduler.scheduled_job(CronTrigger(hour=12, minute=0, timezone="Asia/Jakarta"))
-async def scheduled_qotd():
-    """Scheduled QOTD task that runs in the bot's event loop"""
-    await send_qotd()
-    print("✅ QOTD task triggered (scheduled).")
-
-
 @bot.event
 async def on_error(event, *args, **kwargs):
     if event == 'on_message':
@@ -344,6 +385,9 @@ async def handle_command_error(message):
 
 @bot.event
 async def on_ready():
+    print("Bot is online.")
+    bot.loop.create_task(start_ping_server())
+    
     global db_pool, message_processor_task
 
     # Try to initialize database with retries
