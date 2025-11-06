@@ -345,7 +345,7 @@ async def reconnect_database(retries=4):
     print("❌ Failed to reconnect to database after retries")
     return False
 
-@scheduler.scheduled_job(CronTrigger(hour=11, minute=55, timezone="Asia/Jakarta"))  # 10 minutes before QOTD
+@scheduler.scheduled_job(CronTrigger(hour=12, minute=57, timezone="Asia/Jakarta"))  # 10 minutes before QOTD
 async def wake_database_before_qotd():
     """Wake up the database before QOTD runs"""
     print("🔄 Waking up database for QOTD...")
