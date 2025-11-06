@@ -363,7 +363,7 @@ async def wake_database_before_qotd():
         await reconnect_database()
 
 
-@scheduler.scheduled_job(CronTrigger(hour=12, minute=0, timezone="Asia/Jakarta"))
+@scheduler.scheduled_job(CronTrigger(hour=13, minute=0, timezone="Asia/Jakarta"))
 async def scheduled_qotd():
     """Scheduled QOTD task that runs after database is awake"""
     print("✅ Running QOTD with awake database...")
