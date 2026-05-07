@@ -211,6 +211,16 @@ async def init_db():
                     reminded BOOLEAN DEFAULT FALSE
                 )
             """)
+            # Ensure swear_counts table exists
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS swear_counts (
+                    guild_id BIGINT NOT NULL,
+                    user_id BIGINT NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    last_updated TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            """)
         return pool
     except Exception as e:
         print(f"Error connecting to the database: {e}")
@@ -1249,11 +1259,191 @@ async def handle_hangout_test_reminder(message):
         await message_queue.put((message, "test reminder gagal kirim, cek log"))
 
 
+
+# =====================================================
+# SWEAR JAR FEATURE
+# =====================================================
+
+SWEAR_MILESTONES = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+swear_locks = defaultdict(asyncio.Lock)
+
+# Word stems with optional inflections. Used inside \b...\b boundaries.
+_SWEAR_STEMS = [
+    # English - Medium
+    r"shit(?:s|ty|tier|tiest|ting|ted|head|heads|hole|holes|stain|y|tin|tin')?",
+    r"bitch(?:es|y|ed|ing|in|in')?",
+    r"ass",
+    r"asshole(?:s)?",
+    r"dick(?:s|head|heads)?",
+    r"piss(?:ed|ing|es|er|y)?",
+    r"bastard(?:s)?",
+    r"prick(?:s)?",
+    # Indonesian - Medium
+    r"anjing(?:nya)?",
+    r"anjir+",
+    r"anjg",
+    r"asu+",
+    r"bajingan(?:s)?",
+    r"bangsa[td]",
+    r"tai",
+    r"taik",
+    r"taek",
+    r"jancok",
+    r"jancuk(?:s)?",
+    r"cok",
+    r"cuk",
+    # English - Hard
+    r"fuck(?:ing|in|ed|er|ers|s|wit|tard|boy|able|in')?",
+    r"motherfucker(?:s)?",
+    r"fck",
+    r"fuk",
+    r"cunt(?:s)?",
+    r"cock(?:s|sucker|head)?",
+    r"pussy",
+    r"pussies",
+    r"twat(?:s)?",
+    r"wank(?:er|ers|ed|ing|y)?",
+    r"whore(?:s)?",
+    r"slut(?:s|ty|tier)?",
+    # Indonesian - Hard
+    r"kontol+",
+    r"memek(?:s)?",
+    r"ngentot+",
+    r"ngentod",
+    r"pepek(?:s)?",
+    r"kimak+",
+    r"cukimak",
+    r"pantek(?:s)?",
+]
+
+SWEAR_REGEX = re.compile(r"\b(?:" + "|".join(_SWEAR_STEMS) + r")\b", re.IGNORECASE)
+
+
+def count_swears(text):
+    """Return the number of swear-word occurrences in text."""
+    if not text:
+        return 0
+    return len(SWEAR_REGEX.findall(text))
+
+
+def hit_milestone(old_count, new_count):
+    """Return the highest milestone crossed in this jump, else None."""
+    crossed = [m for m in SWEAR_MILESTONES if old_count < m <= new_count]
+    return max(crossed) if crossed else None
+
+
+# ----- DB helpers for swear jar -----
+
+async def db_increment_swear(guild_id, user_id, increment):
+    """Atomically increment a user's swear count. Returns new total."""
+    if not await ensure_db_pool():
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO swear_counts (guild_id, user_id, count)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (guild_id, user_id)
+               DO UPDATE SET count = swear_counts.count + EXCLUDED.count,
+                             last_updated = NOW()
+               RETURNING count""",
+            guild_id, user_id, increment,
+        )
+        return row["count"] if row else None
+
+
+async def db_swear_leaderboard(guild_id, limit=3):
+    if not await ensure_db_pool():
+        return []
+    async with db_pool.acquire() as conn:
+        return await conn.fetch(
+            """SELECT user_id, count FROM swear_counts
+               WHERE guild_id=$1
+               ORDER BY count DESC
+               LIMIT $2""",
+            guild_id, limit,
+        )
+
+
+# ----- LLM snark for milestones -----
+
+async def generate_swear_milestone_snark(member, milestone, total_count):
+    """Use DeepSeek to generate a snarky celebratory message for hitting a milestone."""
+    prompt = (
+        f"The user '{member.display_name}' just hit {milestone} swears in this Discord server "
+        f"(their total is now {total_count}). Generate a SHORT (1-2 sentences) snarky, "
+        f"celebratory roast in Indonesian/English mix. Be playful and a bit sarcastic. "
+        f"Don't include hashtags. Don't repeat the number more than once. "
+        f"Don't say their name (it will be auto-prepended)."
+    )
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": PERSONALITY},
+                {"role": "user", "content": prompt},
+            ],
+            stream=False,
+        )
+        return f"{member.mention} {response.choices[0].message.content.strip()}"
+    except Exception as e:
+        print(f"[swear jar] LLM error: {e}")
+        return f"{member.mention} udah {milestone} kali ngomong kasar di server ini, congrats kayaknya \U0001F438"
+
+
+# ----- Per-message processor (fire-and-forget) -----
+
+async def process_swear_count(message):
+    """Count swears in this message, increment user's tally, fire snark on milestone."""
+    if message.author.bot or message.guild is None:
+        return
+    n = count_swears(message.content)
+    if n == 0:
+        return
+
+    user_key = (message.guild.id, message.author.id)
+    async with swear_locks[user_key]:
+        new_count = await db_increment_swear(message.guild.id, message.author.id, n)
+        if new_count is None:
+            return
+        old_count = new_count - n
+        milestone = hit_milestone(old_count, new_count)
+        if milestone is None:
+            return
+        try:
+            snark = await generate_swear_milestone_snark(message.author, milestone, new_count)
+            await message.channel.send(snark)
+        except Exception as e:
+            print(f"[swear jar] failed to send milestone snark: {e}")
+
+
+# ----- Leaderboard handler -----
+
+async def handle_swear_leaderboard(message):
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    rows = await db_swear_leaderboard(message.guild.id, limit=3)
+    if not rows:
+        await message_queue.put((message, "ga ada yang ngomong kasar di sini... boring banget hidup kalian"))
+        return
+    medals = ["\U0001F947", "\U0001F948", "\U0001F949"]
+    lines = ["**\U0001F92C Top 3 Mulut Kotor:**"]
+    for i, row in enumerate(rows):
+        member = message.guild.get_member(row["user_id"])
+        name = member.display_name if member else f"<unknown user {row['user_id']}>"
+        lines.append(f"{medals[i]} **{name}** — {row['count']} swears")
+    await message_queue.put((message, "\n".join(lines)))
+
+
 @bot.event
 async def on_message(message):
     global active_tts_user, last_tts_activity, tts_voice_client
     if message.author == bot.user:
         return
+
+    # Swear jar: fire-and-forget, doesn't block normal handling
+    if not message.author.bot and message.guild:
+        asyncio.create_task(process_swear_count(message))
 
         # 🔥 ADD THIS: Skip command processing in the custom message handler
     if message.content.startswith(bot.command_prefix):
@@ -1326,6 +1516,9 @@ async def on_message(message):
         return
     if content_lower in ("kodok jadwal apa aja", "kodok list hangout", "kodok hangouts"):
         await handle_hangout_list(message)
+        return
+    if content_lower.startswith("kodok leaderboard swear") or content_lower.startswith("kodok swear leaderboard"):
+        await handle_swear_leaderboard(message)
         return
 
   
