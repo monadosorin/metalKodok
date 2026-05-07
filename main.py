@@ -195,6 +195,22 @@ async def init_db():
         # Test the connection
         async with pool.acquire() as conn:
             await conn.execute("SELECT 1")
+            # Ensure hangouts table exists
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS hangouts (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT NOT NULL,
+                    channel_id BIGINT NOT NULL,
+                    message_id BIGINT,
+                    creator_id BIGINT NOT NULL,
+                    event_date DATE NOT NULL,
+                    location TEXT,
+                    description TEXT,
+                    status TEXT DEFAULT 'active',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    reminded BOOLEAN DEFAULT FALSE
+                )
+            """)
         return pool
     except Exception as e:
         print(f"Error connecting to the database: {e}")
@@ -768,6 +784,415 @@ async def tts_inactivity_check():
                 tts_voice_client = None
                 active_tts_user = None
 
+
+# =====================================================
+# HANGOUT FEATURE
+# =====================================================
+
+HANGOUT_REACTION = "✅"
+DAY_NAMES_ID = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+MONTH_NAMES_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
+                  "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+
+
+def format_event_date(date_obj):
+    """Format a date like 'Rabu, 20 Mei 2026'."""
+    if isinstance(date_obj, str):
+        date_obj = datetime.fromisoformat(date_obj).date()
+    day_name = DAY_NAMES_ID[date_obj.weekday()]
+    return f"{day_name}, {date_obj.day} {MONTH_NAMES_ID[date_obj.month - 1]} {date_obj.year}"
+
+
+def format_hangout_summary(h):
+    """Format a hangout row/dict as a Discord message body."""
+    status_prefix = ""
+    if h.get("status") == "cancelled":
+        status_prefix = "❌ **CANCELLED** ❌\n\n"
+    location = h.get("location") or "(belum ditentuin)"
+    description = h.get("description") or "(no description)"
+    return (
+        f"{status_prefix}"
+        f"📅 **Hangout #{h['id']}**\n"
+        f"**Tanggal:** {format_event_date(h['event_date'])}\n"
+        f"**Tempat:** {location}\n"
+        f"**Acara:** {description}\n\n"
+        f"React with {HANGOUT_REACTION} kalo mau ikut!"
+    )
+
+
+async def deepseek_extract_hangout(user_message):
+    """Extract hangout details from a casual user message. Returns dict."""
+    today = datetime.now().date()
+    system_prompt = (
+        "You extract hangout/event details from a user's casual message "
+        "(Indonesian, English, or mixed) and return STRICT JSON only.\n\n"
+        f"Today's date is {today.isoformat()} (a {DAY_NAMES_ID[today.weekday()]}).\n\n"
+        "Output JSON with these exact fields:\n"
+        "- \"valid\": boolean. true ONLY if the message clearly proposes a hangout/meetup "
+        "with at least a date AND (a location or activity).\n"
+        "- \"event_date\": ISO date string YYYY-MM-DD, or null. If the user says \"tanggal X\" "
+        "with no month, pick the NEXT occurrence: if X >= today's day-of-month, use this month; "
+        "otherwise next month. \"besok\"=tomorrow, \"lusa\"=day after tomorrow, "
+        "\"minggu depan\"=same weekday next week.\n"
+        "- \"location\": short string like \"Galaxy Mall\", or null.\n"
+        "- \"description\": short summary of activity in casual ID/EN, or null.\n"
+        "- \"reason\": brief string.\n\n"
+        "Return ONLY the JSON object, no markdown fences, no commentary."
+    )
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            response_format={"type": "json_object"},
+            stream=False,
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[hangout extract] error: {e}")
+        return {"valid": False, "reason": f"extraction failed: {e}"}
+
+
+async def deepseek_match_hangout(user_message, hangouts, want_updates=False):
+    """Match a natural-language reference to one of the active hangouts."""
+    today = datetime.now().date()
+    hangouts_summary = [
+        {
+            "id": h["id"],
+            "event_date": h["event_date"].isoformat() if hasattr(h["event_date"], "isoformat") else str(h["event_date"]),
+            "location": h.get("location"),
+            "description": h.get("description"),
+        }
+        for h in hangouts
+    ]
+    update_block = ""
+    if want_updates:
+        update_block = (
+            "\n- \"updates\": object with any fields the user wants to change. "
+            "Allowed keys: \"event_date\" (YYYY-MM-DD), \"location\" (string), "
+            "\"description\" (string). Only include keys the user explicitly changed."
+        )
+    system_prompt = (
+        "You match a user's natural-language reference to one of the existing hangouts "
+        "and return STRICT JSON only.\n\n"
+        f"Today is {today.isoformat()}.\n\n"
+        f"Active hangouts:\n{json.dumps(hangouts_summary, indent=2)}\n\n"
+        f"User message:\n\"{user_message}\"\n\n"
+        "Output JSON:\n"
+        "- \"status\": \"match\" | \"ambiguous\" | \"not_found\"\n"
+        "- \"match_id\": integer id, or null\n"
+        "- \"candidate_ids\": list of ids if ambiguous, else []"
+        f"{update_block}\n"
+        "- \"reason\": brief string.\n\n"
+        "Return ONLY the JSON object."
+    )
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            response_format={"type": "json_object"},
+            stream=False,
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"[hangout match] error: {e}")
+        return {"status": "not_found", "match_id": None, "candidate_ids": [], "reason": f"match failed: {e}"}
+
+
+# ----- DB helpers for hangouts -----
+
+async def db_create_hangout(guild_id, channel_id, creator_id, event_date, location, description):
+    if not await ensure_db_pool():
+        return None
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO hangouts (guild_id, channel_id, creator_id, event_date, location, description)
+               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
+            guild_id, channel_id, creator_id, event_date, location, description,
+        )
+        return row["id"] if row else None
+
+
+async def db_set_hangout_message(hangout_id, message_id):
+    if not await ensure_db_pool():
+        return
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE hangouts SET message_id=$1 WHERE id=$2", message_id, hangout_id)
+
+
+async def db_get_hangout(hangout_id):
+    if not await ensure_db_pool():
+        return None
+    async with db_pool.acquire() as conn:
+        return await conn.fetchrow("SELECT * FROM hangouts WHERE id=$1", hangout_id)
+
+
+async def db_list_active_hangouts(guild_id):
+    if not await ensure_db_pool():
+        return []
+    today = datetime.now().date()
+    async with db_pool.acquire() as conn:
+        return await conn.fetch(
+            """SELECT * FROM hangouts
+               WHERE guild_id=$1 AND status='active' AND event_date >= $2
+               ORDER BY event_date ASC""",
+            guild_id, today,
+        )
+
+
+async def db_update_hangout(hangout_id, fields):
+    if not await ensure_db_pool() or not fields:
+        return False
+    set_clauses = []
+    values = []
+    for i, (k, v) in enumerate(fields.items(), start=1):
+        set_clauses.append(f"{k}=${i}")
+        values.append(v)
+    values.append(hangout_id)
+    sql = f"UPDATE hangouts SET {', '.join(set_clauses)} WHERE id=${len(values)}"
+    async with db_pool.acquire() as conn:
+        await conn.execute(sql, *values)
+    return True
+
+
+async def db_cancel_hangout(hangout_id):
+    if not await ensure_db_pool():
+        return False
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE hangouts SET status='cancelled' WHERE id=$1 AND status='active'",
+            hangout_id,
+        )
+    return True
+
+
+# ----- Command handlers -----
+
+async def handle_hangout_create(message):
+    body = message.content.strip()[len("kodok sayang"):].strip()
+    if not body:
+        await message_queue.put((message, "kodok sayang juga, tapi kasitau detail dong, tanggal sama tempat mau kemana"))
+        return
+
+    extracted = await deepseek_extract_hangout(body)
+    if not extracted.get("valid") or not extracted.get("event_date"):
+        await message_queue.put((message, "hmm ga jelas detailnya bro, kasitau tanggal sama tempat mau kemana 🐸"))
+        return
+
+    try:
+        event_date = datetime.fromisoformat(extracted["event_date"]).date()
+    except Exception:
+        await message_queue.put((message, "tanggalnya aneh bro coba lagi"))
+        return
+
+    if event_date < datetime.now().date():
+        await message_queue.put((message, f"loh tanggal {event_date} kan udah lewat bro 💀"))
+        return
+
+    hangout_id = await db_create_hangout(
+        guild_id=message.guild.id if message.guild else 0,
+        channel_id=message.channel.id,
+        creator_id=message.author.id,
+        event_date=event_date,
+        location=extracted.get("location"),
+        description=extracted.get("description"),
+    )
+    if hangout_id is None:
+        await message_queue.put((message, "waduh DB error, coba lagi nanti"))
+        return
+
+    hangout = {
+        "id": hangout_id,
+        "event_date": event_date,
+        "location": extracted.get("location"),
+        "description": extracted.get("description"),
+        "status": "active",
+    }
+    body_text = "okay man noted! 🐸\n\n" + format_hangout_summary(hangout)
+    try:
+        sent = await message.channel.send(body_text)
+        try:
+            await sent.add_reaction(HANGOUT_REACTION)
+        except Exception as e:
+            print(f"[hangout] failed to add reaction: {e}")
+        await db_set_hangout_message(hangout_id, sent.id)
+    except Exception as e:
+        print(f"[hangout] failed to send announcement: {e}")
+        await message_queue.put((message, "kelar nyimpen tapi ga bisa kirim announcement, sori bro"))
+
+
+async def handle_hangout_update(message):
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    body = message.content.strip()[len("kodok update hangout"):].strip()
+    if not body:
+        await message_queue.put((message, "update hangout yang mana, kasitau bro"))
+        return
+
+    hangouts = await db_list_active_hangouts(message.guild.id)
+    if not hangouts:
+        await message_queue.put((message, "ga ada hangout aktif sekarang, ga ada yang bisa diupdate"))
+        return
+
+    result = await deepseek_match_hangout(body, [dict(h) for h in hangouts], want_updates=True)
+    status = result.get("status")
+    if status == "not_found":
+        await message_queue.put((message, "ga nemu hangout itu di list, coba cek `kodok jadwal apa aja`"))
+        return
+    if status == "ambiguous":
+        ids = ", ".join(f"#{i}" for i in (result.get("candidate_ids") or []))
+        await message_queue.put((message, f"yang mana sih, ada {ids}? specifikin dong"))
+        return
+
+    hangout_id = result.get("match_id")
+    if hangout_id is None:
+        await message_queue.put((message, "bingung gw, hangout mana yang dimaksud"))
+        return
+
+    updates = result.get("updates") or {}
+    clean = {}
+    if "event_date" in updates:
+        try:
+            d = datetime.fromisoformat(updates["event_date"]).date()
+            if d < datetime.now().date():
+                await message_queue.put((message, "tanggal baru udah lewat anjir"))
+                return
+            clean["event_date"] = d
+        except Exception:
+            pass
+    for k in ("location", "description"):
+        if k in updates and isinstance(updates[k], str):
+            clean[k] = updates[k]
+
+    if not clean:
+        await message_queue.put((message, "mau update apa coba? gajelas"))
+        return
+
+    await db_update_hangout(hangout_id, clean)
+
+    updated = await db_get_hangout(hangout_id)
+    if updated and updated["message_id"]:
+        try:
+            channel = bot.get_channel(updated["channel_id"])
+            if channel:
+                msg = await channel.fetch_message(updated["message_id"])
+                await msg.edit(content="okay man noted! 🐸 (updated)\n\n" + format_hangout_summary(dict(updated)))
+        except Exception as e:
+            print(f"[hangout] failed to edit announcement: {e}")
+
+    await message_queue.put((message, f"udah di-update bro, hangout #{hangout_id} 🐸"))
+
+
+async def handle_hangout_cancel(message):
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    body = message.content.strip()[len("kodok cancel hangout"):].strip()
+    if not body:
+        await message_queue.put((message, "cancel yang mana, kasitau"))
+        return
+
+    hangouts = await db_list_active_hangouts(message.guild.id)
+    if not hangouts:
+        await message_queue.put((message, "ga ada hangout aktif sekarang"))
+        return
+
+    result = await deepseek_match_hangout(body, [dict(h) for h in hangouts], want_updates=False)
+    status = result.get("status")
+    if status == "not_found":
+        await message_queue.put((message, "hangout apa anjir gada di list"))
+        return
+    if status == "ambiguous":
+        ids = ", ".join(f"#{i}" for i in (result.get("candidate_ids") or []))
+        await message_queue.put((message, f"yang mana sih, ada {ids}? specifikin dong"))
+        return
+
+    hangout_id = result.get("match_id")
+    if hangout_id is None:
+        await message_queue.put((message, "bingung gw, hangout mana yang dicancel"))
+        return
+
+    await db_cancel_hangout(hangout_id)
+
+    updated = await db_get_hangout(hangout_id)
+    if updated and updated["message_id"]:
+        try:
+            channel = bot.get_channel(updated["channel_id"])
+            if channel:
+                msg = await channel.fetch_message(updated["message_id"])
+                await msg.edit(content=format_hangout_summary(dict(updated)))
+        except Exception as e:
+            print(f"[hangout] failed to edit announcement on cancel: {e}")
+
+    await message_queue.put((message, f"hangout #{hangout_id} udah di-cancel bro 💀"))
+
+
+async def handle_hangout_list(message):
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    hangouts = await db_list_active_hangouts(message.guild.id)
+    if not hangouts:
+        await message_queue.put((message, "lagi gada hangout aktif bolo, sepi banget hidupmu"))
+        return
+    lines = ["📋 **Hangout aktif:**"]
+    for h in hangouts:
+        loc = h["location"] or "(no location)"
+        desc = h["description"] or "(no description)"
+        lines.append(f"`#{h['id']}` — {format_event_date(h['event_date'])} — {loc} — {desc}")
+    await message_queue.put((message, "\n".join(lines)))
+
+
+# ----- Day-before reminder -----
+
+@scheduler.scheduled_job(CronTrigger(hour=9, minute=0, timezone="Asia/Jakarta"))
+async def daily_hangout_reminders():
+    """Send a heads-up the day before each hangout."""
+    if not await ensure_db_pool():
+        return
+    tomorrow = (datetime.now() + timedelta(days=1)).date()
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT * FROM hangouts
+                   WHERE status='active' AND event_date=$1 AND reminded=FALSE""",
+                tomorrow,
+            )
+        for h in rows:
+            try:
+                channel = bot.get_channel(h["channel_id"])
+                if not channel or not h["message_id"]:
+                    continue
+                msg = await channel.fetch_message(h["message_id"])
+                attendees = []
+                for reaction in msg.reactions:
+                    if str(reaction.emoji) == HANGOUT_REACTION:
+                        async for user in reaction.users():
+                            if not user.bot:
+                                attendees.append(user.mention)
+                        break
+                mentions = " ".join(attendees) if attendees else "(belum ada yang react ikut)"
+                loc = h["location"] or "(no location)"
+                desc = h["description"] or "(no description)"
+                await channel.send(
+                    f"⏰ **Reminder: hangout besok!**\n"
+                    f"{format_event_date(h['event_date'])} — {loc} — {desc}\n\n"
+                    f"yo {mentions}, jangan lupa siap2 🐸"
+                )
+                async with db_pool.acquire() as conn:
+                    await conn.execute("UPDATE hangouts SET reminded=TRUE WHERE id=$1", h["id"])
+            except Exception as e:
+                print(f"[hangout reminder] failed for #{h['id']}: {e}")
+    except Exception as e:
+        print(f"[hangout reminder] outer error: {e}")
+
+
 @bot.event
 async def on_message(message):
     global active_tts_user, last_tts_activity, tts_voice_client
@@ -827,6 +1252,21 @@ async def on_message(message):
             await message_queue.put((message, "okay man damn :cold_sweat:"))
         else:
             await message_queue.put((message, "bro i wasn't even talking??? :sob: "))
+        return
+
+    # ----- Hangout triggers -----
+    content_lower = message.content.lower().strip()
+    if content_lower.startswith("kodok sayang"):
+        await handle_hangout_create(message)
+        return
+    if content_lower.startswith("kodok update hangout"):
+        await handle_hangout_update(message)
+        return
+    if content_lower.startswith("kodok cancel hangout"):
+        await handle_hangout_cancel(message)
+        return
+    if content_lower in ("kodok jadwal apa aja", "kodok list hangout", "kodok hangouts"):
+        await handle_hangout_list(message)
         return
 
   
