@@ -1151,6 +1151,37 @@ async def handle_hangout_list(message):
 
 # ----- Day-before reminder -----
 
+async def send_hangout_reminder(hangout, mark_reminded=True, prefix="⏰ **Reminder: hangout besok!**"):
+    """Send a reminder for one hangout. Returns True on success."""
+    try:
+        channel = bot.get_channel(hangout["channel_id"])
+        if not channel or not hangout["message_id"]:
+            return False
+        msg = await channel.fetch_message(hangout["message_id"])
+        attendees = []
+        for reaction in msg.reactions:
+            if str(reaction.emoji) == HANGOUT_REACTION:
+                async for user in reaction.users():
+                    if not user.bot:
+                        attendees.append(user.mention)
+                break
+        mentions = " ".join(attendees) if attendees else "(belum ada yang react ikut)"
+        loc = hangout["location"] or "(no location)"
+        desc = hangout["description"] or "(no description)"
+        await channel.send(
+            f"{prefix}\n"
+            f"{format_event_date(hangout['event_date'])} — {loc} — {desc}\n\n"
+            f"yo {mentions}, jangan lupa siap2 🐸"
+        )
+        if mark_reminded and await ensure_db_pool():
+            async with db_pool.acquire() as conn:
+                await conn.execute("UPDATE hangouts SET reminded=TRUE WHERE id=$1", hangout["id"])
+        return True
+    except Exception as e:
+        print(f"[hangout reminder] failed for #{hangout['id']}: {e}")
+        return False
+
+
 @scheduler.scheduled_job(CronTrigger(hour=9, minute=0, timezone="Asia/Jakarta"))
 async def daily_hangout_reminders():
     """Send a heads-up the day before each hangout."""
@@ -1165,32 +1196,57 @@ async def daily_hangout_reminders():
                 tomorrow,
             )
         for h in rows:
-            try:
-                channel = bot.get_channel(h["channel_id"])
-                if not channel or not h["message_id"]:
-                    continue
-                msg = await channel.fetch_message(h["message_id"])
-                attendees = []
-                for reaction in msg.reactions:
-                    if str(reaction.emoji) == HANGOUT_REACTION:
-                        async for user in reaction.users():
-                            if not user.bot:
-                                attendees.append(user.mention)
-                        break
-                mentions = " ".join(attendees) if attendees else "(belum ada yang react ikut)"
-                loc = h["location"] or "(no location)"
-                desc = h["description"] or "(no description)"
-                await channel.send(
-                    f"⏰ **Reminder: hangout besok!**\n"
-                    f"{format_event_date(h['event_date'])} — {loc} — {desc}\n\n"
-                    f"yo {mentions}, jangan lupa siap2 🐸"
-                )
-                async with db_pool.acquire() as conn:
-                    await conn.execute("UPDATE hangouts SET reminded=TRUE WHERE id=$1", h["id"])
-            except Exception as e:
-                print(f"[hangout reminder] failed for #{h['id']}: {e}")
+            await send_hangout_reminder(dict(h), mark_reminded=True)
     except Exception as e:
         print(f"[hangout reminder] outer error: {e}")
+
+
+async def handle_hangout_test_reminder(message):
+    """Manually fire reminder(s) for testing. Doesn't mark reminded=TRUE."""
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    body = message.content.strip()[len("kodok test reminder"):].strip()
+
+    hangouts = await db_list_active_hangouts(message.guild.id)
+    if not hangouts:
+        await message_queue.put((message, "ga ada hangout aktif buat di-test bro"))
+        return
+
+    test_prefix = "🧪 **Test reminder** (this is a test, ga di-mark sebagai reminded)"
+
+    if not body:
+        # No reference: fire for all active hangouts
+        sent = 0
+        for h in hangouts:
+            ok = await send_hangout_reminder(dict(h), mark_reminded=False, prefix=test_prefix)
+            if ok:
+                sent += 1
+        await message_queue.put((message, f"udah test reminder {sent}/{len(hangouts)} hangout aktif 🐸"))
+        return
+
+    # With description: match a specific hangout
+    result = await deepseek_match_hangout(body, [dict(h) for h in hangouts], want_updates=False)
+    status = result.get("status")
+    if status == "not_found":
+        await message_queue.put((message, "ga nemu hangout itu di list"))
+        return
+    if status == "ambiguous":
+        ids = ", ".join(f"#{i}" for i in (result.get("candidate_ids") or []))
+        await message_queue.put((message, f"yang mana sih, ada {ids}? specifikin"))
+        return
+
+    hangout_id = result.get("match_id")
+    if hangout_id is None:
+        await message_queue.put((message, "bingung gw, hangout mana"))
+        return
+    hangout = await db_get_hangout(hangout_id)
+    if not hangout:
+        await message_queue.put((message, "hangout udah ga ada"))
+        return
+    ok = await send_hangout_reminder(dict(hangout), mark_reminded=False, prefix=test_prefix)
+    if not ok:
+        await message_queue.put((message, "test reminder gagal kirim, cek log"))
 
 
 @bot.event
@@ -1264,6 +1320,9 @@ async def on_message(message):
         return
     if content_lower.startswith("kodok cancel hangout"):
         await handle_hangout_cancel(message)
+        return
+    if content_lower.startswith("kodok test reminder"):
+        await handle_hangout_test_reminder(message)
         return
     if content_lower in ("kodok jadwal apa aja", "kodok list hangout", "kodok hangouts"):
         await handle_hangout_list(message)
