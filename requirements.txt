@@ -9,3 +9,6 @@ PyNaCl
 pydub
 aiohttp
 asyncio
+discord.py[voice]
+davey
+audioop-lts

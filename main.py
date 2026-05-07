@@ -211,6 +211,8 @@ async def init_db():
                     reminded BOOLEAN DEFAULT FALSE
                 )
             """)
+            # Migration: add event_time column if missing
+            await conn.execute("ALTER TABLE hangouts ADD COLUMN IF NOT EXISTS event_time TIME")
             # Ensure swear_counts table exists
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS swear_counts (
@@ -805,12 +807,36 @@ MONTH_NAMES_ID = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun",
                   "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
 
 
-def format_event_date(date_obj):
-    """Format a date like 'Rabu, 20 Mei 2026'."""
+def format_event_date(date_obj, time_obj=None):
+    """Format a date (and optional time) like 'Rabu, 20 Mei 2026, jam 19:00'."""
     if isinstance(date_obj, str):
         date_obj = datetime.fromisoformat(date_obj).date()
     day_name = DAY_NAMES_ID[date_obj.weekday()]
-    return f"{day_name}, {date_obj.day} {MONTH_NAMES_ID[date_obj.month - 1]} {date_obj.year}"
+    base = f"{day_name}, {date_obj.day} {MONTH_NAMES_ID[date_obj.month - 1]} {date_obj.year}"
+    if time_obj is None:
+        return base
+    if isinstance(time_obj, str):
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                time_obj = datetime.strptime(time_obj, fmt).time()
+                break
+            except Exception:
+                pass
+        else:
+            return base
+    return f"{base}, jam {time_obj.strftime('%H:%M')}"
+
+
+def parse_event_time(s):
+    """Parse 'HH:MM' or 'HH:MM:SS' string to datetime.time. Returns None on failure."""
+    if not s:
+        return None
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(s, fmt).time()
+        except Exception:
+            pass
+    return None
 
 
 def format_hangout_summary(h):
@@ -823,7 +849,7 @@ def format_hangout_summary(h):
     return (
         f"{status_prefix}"
         f"📅 **Hangout #{h['id']}**\n"
-        f"**Tanggal:** {format_event_date(h['event_date'])}\n"
+        f"**Tanggal:** {format_event_date(h['event_date'], h.get('event_time'))}\n"
         f"**Tempat:** {location}\n"
         f"**Acara:** {description}\n\n"
         f"React with {HANGOUT_REACTION} kalo mau ikut!"
@@ -844,6 +870,12 @@ async def deepseek_extract_hangout(user_message):
         "with no month, pick the NEXT occurrence: if X >= today's day-of-month, use this month; "
         "otherwise next month. \"besok\"=tomorrow, \"lusa\"=day after tomorrow, "
         "\"minggu depan\"=same weekday next week.\n"
+        "- \"event_time\": time string \"HH:MM\" (24-hour), or null if not specified. "
+        "Indonesian time-of-day hints: \"pagi\"=morning (06-11), \"siang\"=midday (11-15), "
+        "\"sore\"=afternoon (15-18), \"malam\"=evening (18-22). "
+        "\"jam 7 malam\"=19:00. \"jam 6 sore\"=18:00. \"jam 7 pagi\"=07:00. "
+        "\"after maghrib\"=18:00. If user only says \"jam 7\" with no qualifier and "
+        "context suggests a hangout, default to evening (19:00).\n"
         "- \"location\": short string like \"Galaxy Mall\", or null.\n"
         "- \"description\": short summary of activity in casual ID/EN, or null.\n"
         "- \"reason\": brief string.\n\n"
@@ -872,6 +904,7 @@ async def deepseek_match_hangout(user_message, hangouts, want_updates=False):
         {
             "id": h["id"],
             "event_date": h["event_date"].isoformat() if hasattr(h["event_date"], "isoformat") else str(h["event_date"]),
+            "event_time": h["event_time"].strftime("%H:%M") if h.get("event_time") else None,
             "location": h.get("location"),
             "description": h.get("description"),
         }
@@ -881,8 +914,9 @@ async def deepseek_match_hangout(user_message, hangouts, want_updates=False):
     if want_updates:
         update_block = (
             "\n- \"updates\": object with any fields the user wants to change. "
-            "Allowed keys: \"event_date\" (YYYY-MM-DD), \"location\" (string), "
-            "\"description\" (string). Only include keys the user explicitly changed."
+            "Allowed keys: \"event_date\" (YYYY-MM-DD), \"event_time\" (HH:MM 24h), "
+            "\"location\" (string), \"description\" (string). "
+            "Only include keys the user explicitly changed."
         )
     system_prompt = (
         "You match a user's natural-language reference to one of the existing hangouts "
@@ -916,14 +950,14 @@ async def deepseek_match_hangout(user_message, hangouts, want_updates=False):
 
 # ----- DB helpers for hangouts -----
 
-async def db_create_hangout(guild_id, channel_id, creator_id, event_date, location, description):
+async def db_create_hangout(guild_id, channel_id, creator_id, event_date, event_time, location, description):
     if not await ensure_db_pool():
         return None
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO hangouts (guild_id, channel_id, creator_id, event_date, location, description)
-               VALUES ($1,$2,$3,$4,$5,$6) RETURNING id""",
-            guild_id, channel_id, creator_id, event_date, location, description,
+            """INSERT INTO hangouts (guild_id, channel_id, creator_id, event_date, event_time, location, description)
+               VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id""",
+            guild_id, channel_id, creator_id, event_date, event_time, location, description,
         )
         return row["id"] if row else None
 
@@ -1004,11 +1038,14 @@ async def handle_hangout_create(message):
         await message_queue.put((message, f"loh tanggal {event_date} kan udah lewat bro 💀"))
         return
 
+    event_time = parse_event_time(extracted.get("event_time"))
+
     hangout_id = await db_create_hangout(
         guild_id=message.guild.id if message.guild else 0,
         channel_id=message.channel.id,
         creator_id=message.author.id,
         event_date=event_date,
+        event_time=event_time,
         location=extracted.get("location"),
         description=extracted.get("description"),
     )
@@ -1019,6 +1056,7 @@ async def handle_hangout_create(message):
     hangout = {
         "id": hangout_id,
         "event_date": event_date,
+        "event_time": event_time,
         "location": extracted.get("location"),
         "description": extracted.get("description"),
         "status": "active",
@@ -1076,6 +1114,10 @@ async def handle_hangout_update(message):
             clean["event_date"] = d
         except Exception:
             pass
+    if "event_time" in updates:
+        t = parse_event_time(updates["event_time"])
+        if t is not None:
+            clean["event_time"] = t
     for k in ("location", "description"):
         if k in updates and isinstance(updates[k], str):
             clean[k] = updates[k]
@@ -1155,7 +1197,7 @@ async def handle_hangout_list(message):
     for h in hangouts:
         loc = h["location"] or "(no location)"
         desc = h["description"] or "(no description)"
-        lines.append(f"`#{h['id']}` — {format_event_date(h['event_date'])} — {loc} — {desc}")
+        lines.append(f"`#{h['id']}` — {format_event_date(h['event_date'], h.get('event_time'))} — {loc} — {desc}")
     await message_queue.put((message, "\n".join(lines)))
 
 
@@ -1180,7 +1222,7 @@ async def send_hangout_reminder(hangout, mark_reminded=True, prefix="⏰ **Remin
         desc = hangout["description"] or "(no description)"
         await channel.send(
             f"{prefix}\n"
-            f"{format_event_date(hangout['event_date'])} — {loc} — {desc}\n\n"
+            f"{format_event_date(hangout['event_date'], hangout.get('event_time'))} — {loc} — {desc}\n\n"
             f"yo {mentions}, jangan lupa siap2 🐸"
         )
         if mark_reminded and await ensure_db_pool():
