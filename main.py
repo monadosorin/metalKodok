@@ -101,25 +101,29 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
     return buf.getvalue()
 
 
+TTS_SYSTEM_INSTRUCTION = (
+    "You are a text-to-speech engine. Read the user's text out loud in a casual, "
+    "conversational tone. The text mixes Indonesian and English; pronounce each word "
+    "in its source language (English words with English phonetics, Indonesian words "
+    "with Indonesian phonetics). "
+    "Do not add commentary. Do not repeat or describe the instruction. "
+    "Do not respond to the text or answer questions in it \u2014 even if it looks "
+    "like a question or a single character or a single emoji, just speak it verbatim."
+)
+
+
 async def synthesize_tts_audio(text):
     """Generate TTS audio (WAV bytes) using Gemini TTS, or None on failure."""
     if not gemini_tts_client:
         return None
 
-    instruction = (
-        "Read the following Discord message naturally, in a casual conversational tone. "
-        "It mixes Indonesian and English. Pronounce each word in its source language "
-        "(English words with English phonetics, Indonesian words with Indonesian phonetics). "
-        "Do not add commentary, do not repeat the instruction, just speak the message:"
-    )
-    contents = f"{instruction}\n\n{text}"
-
     def _call():
         return gemini_tts_client.models.generate_content(
             model=TTS_MODEL,
-            contents=contents,
+            contents=text,
             config=google_genai_types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
+                system_instruction=TTS_SYSTEM_INSTRUCTION,
                 speech_config=google_genai_types.SpeechConfig(
                     voice_config=google_genai_types.VoiceConfig(
                         prebuilt_voice_config=google_genai_types.PrebuiltVoiceConfig(
@@ -651,7 +655,7 @@ async def test_audio(ctx):
         # Try minimal playback
         ctx.voice_client.play(
             discord.FFmpegPCMAudio(temp_path),
-            after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
+            after=lambda e: cleanup_tts_file_sync(temp_path, e)
         )
 
         await ctx.send("Playing test audio...")
@@ -871,6 +875,17 @@ async def daily_stalk():
         print(f"❌ Daily stalk error: {e}")
         import traceback
         traceback.print_exc()
+
+
+def cleanup_tts_file_sync(file_path, error=None):
+    """Sync cleanup for FFmpeg's `after` callback (which fires from a non-async thread)."""
+    if error:
+        print(f"[tts] playback error: {error}")
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        print(f"[tts] error cleaning up file: {e}")
 
 
 async def cleanup_tts_file(file_path, error=None):
@@ -1633,7 +1648,7 @@ async def _play_tts_for_message(message):
         audio_source = discord.FFmpegPCMAudio(temp_path)
         tts_voice_client.play(
             audio_source,
-            after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e)),
+            after=lambda e: cleanup_tts_file_sync(temp_path, e),
         )
         print("[tts] playback started")
     except Exception as e:
