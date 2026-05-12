@@ -20,7 +20,16 @@ import subprocess
 from pydub import AudioSegment
 from aiohttp import web
 import asyncio, asyncpg
-
+import io
+import wave
+try:
+    from google import genai as google_genai
+    from google.genai import types as google_genai_types
+    from google.oauth2 import service_account as google_sa
+    _GENAI_AVAILABLE = True
+except ImportError:
+    _GENAI_AVAILABLE = False
+    print("[gemini tts] google-genai not installed. Add `google-genai` to requirements.txt")
 
 
 active_tts_user = None
@@ -49,6 +58,86 @@ deepseek_client = OpenAI(
     api_key=DEEPSEEK_API_KEY,
     base_url="https://api.deepseek.com"
 )
+
+# ===== Gemini TTS (Vertex AI) =====
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCP_REGION = os.getenv("GCP_REGION", "us-central1")
+TTS_VOICE = os.getenv("TTS_VOICE", "Kore")
+TTS_MODEL = os.getenv("TTS_MODEL", "gemini-2.5-flash-tts")
+TTS_SAMPLE_RATE = 24000  # Gemini TTS LINEAR16 output rate
+
+gemini_tts_client = None
+if _GENAI_AVAILABLE and GCP_PROJECT_ID:
+    try:
+        creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+        if creds_json:
+            credentials = google_sa.Credentials.from_service_account_info(
+                json.loads(creds_json),
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+        else:
+            # Fall back to GOOGLE_APPLICATION_CREDENTIALS env var (file path)
+            credentials = None
+        gemini_tts_client = google_genai.Client(
+            vertexai=True,
+            project=GCP_PROJECT_ID,
+            location=GCP_REGION,
+            credentials=credentials,
+        )
+        print(f"[gemini tts] client initialized (project={GCP_PROJECT_ID}, region={GCP_REGION})")
+    except Exception as e:
+        print(f"[gemini tts] failed to init client: {e}")
+        gemini_tts_client = None
+
+
+def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
+    """Wrap raw 16-bit mono PCM in a WAV container so FFmpeg can play it."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
+
+
+async def synthesize_tts_audio(text):
+    """Generate TTS audio (WAV bytes) using Gemini TTS, or None on failure."""
+    if not gemini_tts_client:
+        return None
+
+    instruction = (
+        "Read the following Discord message naturally, in a casual conversational tone. "
+        "It mixes Indonesian and English. Pronounce each word in its source language "
+        "(English words with English phonetics, Indonesian words with Indonesian phonetics). "
+        "Do not add commentary, do not repeat the instruction, just speak the message:"
+    )
+    contents = f"{instruction}\n\n{text}"
+
+    def _call():
+        return gemini_tts_client.models.generate_content(
+            model=TTS_MODEL,
+            contents=contents,
+            config=google_genai_types.GenerateContentConfig(
+                response_modalities=["AUDIO"],
+                speech_config=google_genai_types.SpeechConfig(
+                    voice_config=google_genai_types.VoiceConfig(
+                        prebuilt_voice_config=google_genai_types.PrebuiltVoiceConfig(
+                            voice_name=TTS_VOICE,
+                        )
+                    )
+                ),
+            ),
+        )
+
+    try:
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, _call)
+        pcm_bytes = response.candidates[0].content.parts[0].inline_data.data
+        return _pcm_to_wav_bytes(pcm_bytes)
+    except Exception as e:
+        print(f"[gemini tts] synth error: {e}")
+        return None
 
 BOT_NAME = "Metal Kodok"
 PERSONALITY = """
@@ -495,20 +584,36 @@ async def join_vc(ctx):
 
 @bot.command(name="starttts")
 async def start_tts(ctx, member: discord.Member):
-    """Start reading messages from the specified user in #vc-chat."""
-    global active_tts_user, last_tts_activity
+    """Start reading messages from the specified user. Auto-joins the caller's VC."""
+    global active_tts_user, last_tts_activity, tts_voice_client
 
-    # Ensure we're in a voice channel
     if not ctx.author.voice:
-        await ctx.send("You need to be in a voice channel first!")
+        await ctx.send("masuk VC dulu bro, baru aku ikut.")
         return
 
-    if not ctx.voice_client:
-        await ctx.author.voice.channel.connect()
+    channel = ctx.author.voice.channel
+
+    # Already connected somewhere — move if needed, otherwise stay.
+    if ctx.voice_client:
+        if ctx.voice_client.channel != channel:
+            try:
+                await ctx.voice_client.move_to(channel)
+            except Exception as e:
+                print(f"[tts] move_to failed: {e}")
+                await ctx.send("ga bisa pindah VC bro, coba lagi")
+                return
+        tts_voice_client = ctx.voice_client
+    else:
+        try:
+            tts_voice_client = await channel.connect()
+        except Exception as e:
+            print(f"[tts] connect failed: {e}")
+            await ctx.send(f"ga bisa join VC bro: {e}")
+            return
 
     active_tts_user = member.id
     last_tts_activity = time.time()
-    await ctx.send(f"🐸 Started reading messages from {member.display_name} in #vc-chat.")
+    await ctx.send(f"🐸 Joined **{channel.name}** and reading messages from **{member.display_name}** from any channel.")
 
 @bot.command(name="stoptts")
 async def stop_tts(ctx):
@@ -1062,7 +1167,7 @@ async def handle_hangout_create(message):
         "description": extracted.get("description"),
         "status": "active",
     }
-    body_text = "mau hangout lho ya\n\n" + format_hangout_summary(hangout)
+    body_text = "okay man noted! 🐸\n\n" + format_hangout_summary(hangout)
     try:
         sent = await message.channel.send(body_text)
         try:
@@ -1495,6 +1600,46 @@ async def handle_swear_leaderboard(message):
     await message_queue.put((message, "\n".join(lines)))
 
 
+
+async def _play_tts_for_message(message):
+    """Fire-and-forget: synthesize Gemini TTS and play it on the active voice client."""
+    global tts_voice_client
+    try:
+        print(f"[tts] synthesizing for: {message.content[:80]}")
+        wav_bytes = await synthesize_tts_audio(message.content)
+        if not wav_bytes:
+            print("[tts] synth returned no audio, skipping")
+            return
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_path = temp_file.name
+            temp_file.write(wav_bytes)
+
+        if not (tts_voice_client and tts_voice_client.is_connected()):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            return
+
+        if tts_voice_client.is_playing():
+            # Another message already grabbed the channel; queue is not implemented, just drop.
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            return
+
+        audio_source = discord.FFmpegPCMAudio(temp_path)
+        tts_voice_client.play(
+            audio_source,
+            after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e)),
+        )
+        print("[tts] playback started")
+    except Exception as e:
+        print(f"[tts] error in _play_tts_for_message: {e}")
+
+
 @bot.event
 async def on_message(message):
     global active_tts_user, last_tts_activity, tts_voice_client
@@ -1509,46 +1654,15 @@ async def on_message(message):
     if message.content.startswith(bot.command_prefix):
         await bot.process_commands(message)
         return
-        # 🔊 TTS functionality
+    # 🔊 TTS functionality (any channel, Gemini TTS)
     if (active_tts_user == message.author.id and
-            message.channel.name == "vc-chat" and
             tts_voice_client and
             tts_voice_client.is_connected() and
-            not tts_voice_client.is_playing()):
+            not tts_voice_client.is_playing() and
+            message.content.strip()):
 
         last_tts_activity = time.time()
-
-        try:
-            print(f"Generating TTS audio for: {message.content}")
-
-            # Generate TTS
-            tts = gTTS(text=message.content, lang="id")
-
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
-                temp_path = temp_file.name
-
-            tts.save(temp_path)
-            print(f"TTS saved to: {temp_path}")
-
-            # MINIMAL approach - no FFmpeg options
-            audio_source = discord.FFmpegPCMAudio(temp_path)
-
-            # Play audio
-            tts_voice_client.play(
-                audio_source,
-                after=lambda e: asyncio.create_task(cleanup_tts_file(temp_path, e))
-            )
-
-            print("TTS playback started successfully!")
-
-        except Exception as e:
-            print(f"Error in TTS processing: {e}")
-            if 'temp_path' in locals() and os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
+        asyncio.create_task(_play_tts_for_message(message))
     history_key = await get_history_key(message)
 
   

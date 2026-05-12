@@ -12,3 +12,4 @@ asyncio
 discord.py[voice]
 davey
 audioop-lts
+google-genai
