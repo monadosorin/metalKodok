@@ -22,6 +22,7 @@ from aiohttp import web
 import asyncio, asyncpg
 
 
+
 active_tts_user = None
 last_tts_activity = 0
 tts_voice_client = None
