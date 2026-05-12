@@ -1061,7 +1061,7 @@ async def handle_hangout_create(message):
         "description": extracted.get("description"),
         "status": "active",
     }
-    body_text = "okay man noted! 🐸\n\n" + format_hangout_summary(hangout)
+    body_text = "mau hangout lho ya\n\n" + format_hangout_summary(hangout)
     try:
         sent = await message.channel.send(body_text)
         try:
@@ -1309,6 +1309,15 @@ async def handle_hangout_test_reminder(message):
 SWEAR_MILESTONES = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
 swear_locks = defaultdict(asyncio.Lock)
 
+# Channels where milestone announcements are suppressed (counter still increments,
+# so the leaderboard stays accurate — we just don't disrupt the channel with snark).
+# To get a channel ID: User Settings → Advanced → enable Developer Mode,
+# then right-click the channel → Copy Channel ID. Add as integers below.
+SWEAR_MILESTONE_MUTED_CHANNELS = {
+    1308422878802350171,  # #vent
+    1306684687032258580,  # #panic
+}
+
 # Word stems with optional inflections. Used inside \b...\b boundaries.
 _SWEAR_STEMS = [
     # English - Medium
@@ -1409,13 +1418,13 @@ async def db_swear_leaderboard(guild_id, limit=3):
 # ----- LLM snark for milestones -----
 
 async def generate_swear_milestone_snark(member, milestone, total_count):
-    """Use DeepSeek to generate a snarky celebratory message for hitting a milestone."""
+    """Generate just the snark line (name + count are in the structured headline above it)."""
     prompt = (
-        f"The user '{member.display_name}' just hit {milestone} swears in this Discord server "
-        f"(their total is now {total_count}). Generate a SHORT (1-2 sentences) snarky, "
-        f"celebratory roast in Indonesian/English mix. Be playful and a bit sarcastic. "
-        f"Don't include hashtags. Don't repeat the number more than once. "
-        f"Don't say their name (it will be auto-prepended)."
+        f"The user '{member.display_name}' just hit a swear milestone in this Discord server. "
+        f"Generate ONE SHORT (1-2 sentences) snarky, celebratory roast in casual Indonesian/English mix. "
+        f"Be playful and a bit sarcastic. Don't include hashtags. "
+        f"DO NOT mention their name (it appears separately). "
+        f"DO NOT mention the milestone number (it appears separately)."
     )
     try:
         response = deepseek_client.chat.completions.create(
@@ -1426,10 +1435,10 @@ async def generate_swear_milestone_snark(member, milestone, total_count):
             ],
             stream=False,
         )
-        return f"{member.mention} {response.choices[0].message.content.strip()}"
+        return response.choices[0].message.content.strip()
     except Exception as e:
         print(f"[swear jar] LLM error: {e}")
-        return f"{member.mention} udah {milestone} kali ngomong kasar di server ini, congrats kayaknya \U0001F438"
+        return "santai dikit bro, mulut e kotor banget \U0001F438"
 
 
 # ----- Per-message processor (fire-and-forget) -----
@@ -1451,9 +1460,17 @@ async def process_swear_count(message):
         milestone = hit_milestone(old_count, new_count)
         if milestone is None:
             return
+        # Suppress milestone announcement in muted channels (counter is already incremented
+        # above, so the leaderboard stays accurate).
+        if message.channel.id in SWEAR_MILESTONE_MUTED_CHANNELS:
+            channel_name = getattr(message.channel, "name", message.channel.id)
+            print(f"[swear jar] suppressed milestone {milestone} for {message.author.display_name} in muted channel #{channel_name}")
+            return
         try:
             snark = await generate_swear_milestone_snark(message.author, milestone, new_count)
-            await message.channel.send(snark)
+            await message.channel.send(
+                f"\U0001F389 {message.author.mention} just hit **{milestone}** total swears!\n{snark}"
+            )
         except Exception as e:
             print(f"[swear jar] failed to send milestone snark: {e}")
 
