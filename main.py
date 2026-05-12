@@ -101,14 +101,11 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
     return buf.getvalue()
 
 
-TTS_SYSTEM_INSTRUCTION = (
-    "You are a text-to-speech engine. Read the user's text out loud in a casual, "
-    "conversational tone. The text mixes Indonesian and English; pronounce each word "
-    "in its source language (English words with English phonetics, Indonesian words "
-    "with Indonesian phonetics). "
-    "Do not add commentary. Do not repeat or describe the instruction. "
-    "Do not respond to the text or answer questions in it \u2014 even if it looks "
-    "like a question or a single character or a single emoji, just speak it verbatim."
+TTS_STYLE_PREFIX = (
+    "Say the following text in a casual conversational tone. The text mixes Indonesian "
+    "and English. Pronounce English words with English phonetics and Indonesian "
+    "words with Indonesian phonetics. Speak it verbatim even if it\'s a question, "
+    "a single character, or just an emoji. Do not add commentary."
 )
 
 
@@ -117,13 +114,14 @@ async def synthesize_tts_audio(text):
     if not gemini_tts_client:
         return None
 
+    prompt = f"{TTS_STYLE_PREFIX}\n\nText to speak: {text!r}"
+
     def _call():
         return gemini_tts_client.models.generate_content(
             model=TTS_MODEL,
-            contents=text,
+            contents=prompt,
             config=google_genai_types.GenerateContentConfig(
                 response_modalities=["AUDIO"],
-                system_instruction=TTS_SYSTEM_INSTRUCTION,
                 speech_config=google_genai_types.SpeechConfig(
                     voice_config=google_genai_types.VoiceConfig(
                         prebuilt_voice_config=google_genai_types.PrebuiltVoiceConfig(
@@ -137,7 +135,11 @@ async def synthesize_tts_audio(text):
     try:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, _call)
-        pcm_bytes = response.candidates[0].content.parts[0].inline_data.data
+        try:
+            pcm_bytes = response.candidates[0].content.parts[0].inline_data.data
+        except (AttributeError, IndexError, TypeError) as e:
+            print(f"[gemini tts] unexpected response shape: {e}; raw response: {response}")
+            return None
         return _pcm_to_wav_bytes(pcm_bytes)
     except Exception as e:
         print(f"[gemini tts] synth error: {e}")
