@@ -102,7 +102,7 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
 
 
 TTS_STYLE_PREFIX = (
-    "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
+    "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation of indonesnian and english, "
     "the literal string given. Do NOT complete partial words. Do NOT translate. "
     "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
     "or gibberish must be spoken exactly as written. talk in casual conversational tone."
