@@ -105,7 +105,7 @@ TTS_STYLE_PREFIX = (
     "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
     "the literal string given. Do NOT complete partial words. Do NOT translate. "
     "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
-    "or gibberish must be spoken exactly as written. talk in casual conversational tone and valley girl esque."
+    "or gibberish must be spoken exactly as written. talk in casual conversational tone."
 )
 
 
