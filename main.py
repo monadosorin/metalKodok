@@ -105,7 +105,7 @@ TTS_STYLE_PREFIX = (
     "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
     "the literal string given. Do NOT complete partial words. Do NOT translate. "
     "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
-    "or gibberish must be spoken exactly as written. talk in casual conversational tone."
+    "or gibberish must be spoken exactly as written. talk in casual conversational tone and valley girl esque."
 )
 
 
@@ -152,6 +152,55 @@ async def synthesize_tts_audio(text):
         return None
 
 
+
+
+def clean_for_tts(message):
+    """Strip Discord-specific tokens (emojis, mentions, markdown, URLs) so the TTS reads naturally."""
+    text = message.content
+
+    # Custom emojis: <:name:id> or <a:name:id>  ->  name
+    text = re.sub(r"<a?:([A-Za-z0-9_]+):\d+>", r"\1", text)
+
+    # User mentions: <@123> or <@!123>  ->  display name
+    def _user_repl(m):
+        uid = int(m.group(1))
+        member = message.guild.get_member(uid) if message.guild else None
+        return member.display_name if member else ""
+    text = re.sub(r"<@!?(\d+)>", _user_repl, text)
+
+    # Channel mentions: <#123>  ->  #channel-name
+    def _ch_repl(m):
+        cid = int(m.group(1))
+        channel = bot.get_channel(cid)
+        return f"#{channel.name}" if channel else ""
+    text = re.sub(r"<#(\d+)>", _ch_repl, text)
+
+    # Role mentions: <@&123>  ->  @role-name
+    def _role_repl(m):
+        rid = int(m.group(1))
+        role = message.guild.get_role(rid) if message.guild else None
+        return f"@{role.name}" if role else ""
+    text = re.sub(r"<@&(\d+)>", _role_repl, text)
+
+    # URLs  ->  "link"
+    text = re.sub(r"https?://\S+", "link", text)
+
+    # Markdown formatting: strip the markers, keep the text
+    text = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", text)            # ***bold italic***
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)                  # **bold**
+    text = re.sub(r"__(.+?)__", r"\1", text)                          # __underline__
+    text = re.sub(r"\*([^*\s].*?)\*", r"\1", text)                 # *italic*
+    text = re.sub(r"~~(.+?)~~", r"\1", text)                          # ~~strike~~
+    text = re.sub(r"\|\|(.+?)\|\|", r"\1", text)                  # ||spoiler||
+    text = re.sub(r"```[a-zA-Z0-9_+-]*\n?(.+?)\n?```", r"\1", text, flags=re.DOTALL)  # ```code```
+    text = re.sub(r"`(.+?)`", r"\1", text)                            # `inline code`
+    text = re.sub(r"^>+\s+", "", text, flags=re.MULTILINE)            # > blockquote
+
+    # Normalize whitespace
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
 # ===== TTS message queue (so rapid messages don't get dropped) =====
 TTS_QUEUE_MAX = 50
 tts_message_queue = asyncio.Queue(maxsize=TTS_QUEUE_MAX)
@@ -168,7 +217,12 @@ async def tts_worker():
             if not (tts_voice_client and tts_voice_client.is_connected()):
                 continue
 
-            wav_bytes = await synthesize_tts_audio(message.content)
+            cleaned = clean_for_tts(message)
+            if not cleaned:
+                print("[tts] cleaned message is empty (probably just emojis/mentions), skipping")
+                continue
+
+            wav_bytes = await synthesize_tts_audio(cleaned)
             if not wav_bytes:
                 continue
 
