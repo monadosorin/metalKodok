@@ -102,10 +102,10 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
 
 
 TTS_STYLE_PREFIX = (
-    "Say the following text in a casual conversational tone. The text mixes Indonesian "
-    "and English. Pronounce English words with English phonetics and Indonesian "
-    "words with Indonesian phonetics. Speak it verbatim even if it\'s a question, "
-    "a single character, or just an emoji. Do not add commentary."
+    "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
+    "the literal string given. Do NOT complete partial words. Do NOT translate. "
+    "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
+    "or gibberish must be spoken exactly as written."
 )
 
 
@@ -114,7 +114,13 @@ async def synthesize_tts_audio(text):
     if not gemini_tts_client:
         return None
 
-    prompt = f"{TTS_STYLE_PREFIX}\n\nText to speak: {text!r}"
+    # Wrap text in triple-quote delimiters so the model treats it as a literal string.
+    safe_text = text.replace('"""', '“””')
+    prompt = (
+        f"{TTS_STYLE_PREFIX}\n\n"
+        f"String to speak (read EXACTLY this, no completion, no response):\n"
+        f'"""\n{safe_text}\n"""'
+    )
 
     def _call():
         return gemini_tts_client.models.generate_content(
@@ -144,6 +150,66 @@ async def synthesize_tts_audio(text):
     except Exception as e:
         print(f"[gemini tts] synth error: {e}")
         return None
+
+
+# ===== TTS message queue (so rapid messages don't get dropped) =====
+TTS_QUEUE_MAX = 50
+tts_message_queue = asyncio.Queue(maxsize=TTS_QUEUE_MAX)
+_tts_worker_started = False
+
+
+async def tts_worker():
+    """Pulls messages off the queue and TTSes them one at a time, in order."""
+    while True:
+        message = await tts_message_queue.get()
+        try:
+            if active_tts_user != message.author.id:
+                continue
+            if not (tts_voice_client and tts_voice_client.is_connected()):
+                continue
+
+            wav_bytes = await synthesize_tts_audio(message.content)
+            if not wav_bytes:
+                continue
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
+                temp_path = f.name
+                f.write(wav_bytes)
+
+            if not (tts_voice_client and tts_voice_client.is_connected()):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+                continue
+
+            while tts_voice_client and tts_voice_client.is_playing():
+                await asyncio.sleep(0.05)
+
+            audio_source = discord.FFmpegPCMAudio(temp_path)
+            tts_voice_client.play(
+                audio_source,
+                after=lambda e: cleanup_tts_file_sync(temp_path, e),
+            )
+            print(f"[tts] playing queued message ({tts_message_queue.qsize()} left in queue)")
+
+            while tts_voice_client and tts_voice_client.is_playing():
+                await asyncio.sleep(0.1)
+        except Exception as e:
+            print(f"[tts] worker error: {e}")
+        finally:
+            tts_message_queue.task_done()
+
+
+def ensure_tts_worker_started():
+    """Idempotent: starts the worker once per bot lifetime."""
+    global _tts_worker_started
+    if _tts_worker_started:
+        return
+    _tts_worker_started = True
+    asyncio.create_task(tts_worker())
+    print("[tts] worker task started")
+
 
 BOT_NAME = "Metal Kodok"
 PERSONALITY = """
@@ -540,6 +606,7 @@ async def on_ready():
                 await asyncio.sleep(5)
 
     message_processor_task = asyncio.create_task(message_processor())
+    ensure_tts_worker_started()
     print(f"Logged in as {bot.user}")
 
 
@@ -623,12 +690,24 @@ async def start_tts(ctx, member: discord.Member):
 
 @bot.command(name="stoptts")
 async def stop_tts(ctx):
-    """Stop reading messages and leave VC."""
+    """Stop reading messages, drain the TTS queue, and leave VC."""
     global active_tts_user, tts_voice_client
 
     active_tts_user = None
 
+    # Drain any pending queued TTS so we don't keep talking after stop
+    drained = 0
+    while not tts_message_queue.empty():
+        try:
+            tts_message_queue.get_nowait()
+            tts_message_queue.task_done()
+            drained += 1
+        except asyncio.QueueEmpty:
+            break
+
     if ctx.voice_client:
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
         await ctx.voice_client.disconnect()
         tts_voice_client = None
         await ctx.send("🕳️ Left the VC and stopped TTS.")
@@ -1671,15 +1750,17 @@ async def on_message(message):
     if message.content.startswith(bot.command_prefix):
         await bot.process_commands(message)
         return
-    # 🔊 TTS functionality (any channel, Gemini TTS)
+    # 🔊 TTS functionality (any channel, Gemini TTS, queued)
     if (active_tts_user == message.author.id and
             tts_voice_client and
             tts_voice_client.is_connected() and
-            not tts_voice_client.is_playing() and
             message.content.strip()):
 
         last_tts_activity = time.time()
-        asyncio.create_task(_play_tts_for_message(message))
+        try:
+            tts_message_queue.put_nowait(message)
+        except asyncio.QueueFull:
+            print(f"[tts] queue full ({TTS_QUEUE_MAX}), dropping message")
     history_key = await get_history_key(message)
 
   
