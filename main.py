@@ -37,8 +37,6 @@ last_tts_activity = 0
 tts_voice_client = None
 
 
-
-
 conversation_histories = defaultdict(list)
 MAX_HISTORY = 5 
 SESSION_TIMEOUT = 180 
@@ -107,7 +105,7 @@ TTS_STYLE_PREFIX = (
     "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
     "the literal string given. Do NOT complete partial words. Do NOT translate. "
     "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
-    "or gibberish must be spoken exactly as written."
+    "or gibberish must be spoken exactly as written. talk in casual conversational tone."
 )
 
 
