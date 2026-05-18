@@ -1812,6 +1812,38 @@ async def handle_swear_leaderboard(message):
     await message_queue.put((message, "\n".join(lines)))
 
 
+async def handle_swear_count(message):
+    """Show the swear count for the message author, or a mentioned user."""
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+
+    # If someone is mentioned (other than the author), show their count instead.
+    target = next((m for m in message.mentions if not m.bot and m.id != message.author.id), None)
+    target = target or message.author
+
+    counts = await db_swear_counts_for_users(message.guild.id, [target.id])
+    count = counts.get(target.id, 0)
+
+    tier_map = [
+        (1,    "mulutmu masih bersih \U0001F607"),
+        (10,   "amatir, baru mulai \U0001F642"),
+        (50,   "lumayan brutal \U0001F608"),
+        (100,  "mulutmu kotor \U0001F480"),
+        (250,  "certified menace \U0001F525"),
+        (500,  "unhinged \U0001F92C"),
+        (10**9, "swearing royalty \U0001F451"),
+    ]
+    tier = next(t for c, t in tier_map if count < c)
+
+    if target.id == message.author.id:
+        prefix = f"{message.author.mention} kamu"
+    else:
+        prefix = f"**{target.display_name}**"
+
+    await message_queue.put((message, f"{prefix} udah **{count}** swears di server ini. {tier}"))
+
+
 async def handle_clean_mouth_leaderboard(message):
     """Top 3 LEAST swearers in the server (the opposite of the swear leaderboard)."""
     if message.guild is None:
@@ -1930,6 +1962,12 @@ async def on_message(message):
         return
     if content_lower.startswith("kodok leaderboard clean") or content_lower.startswith("kodok clean leaderboard"):
         await handle_clean_mouth_leaderboard(message)
+        return
+    if (content_lower == "kodok swear"
+            or content_lower.startswith("kodok swear ")
+            or content_lower.startswith("kodok berapa swear")):
+        # Note: "kodok swear leaderboard" already returned above, so we don't need to re-exclude it
+        await handle_swear_count(message)
         return
 
   
