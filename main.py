@@ -13,11 +13,8 @@ import asyncio
 from collections import defaultdict
 from discord import HTTPException
 from apscheduler.triggers.cron import CronTrigger
-from gtts import gTTS
 import tempfile
 import time
-import subprocess
-from pydub import AudioSegment
 from aiohttp import web
 import asyncio, asyncpg
 import io
@@ -102,10 +99,10 @@ def _pcm_to_wav_bytes(pcm_bytes, sample_rate=TTS_SAMPLE_RATE):
 
 
 TTS_STYLE_PREFIX = (
-    "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation of indonesnian and english, "
+    "You are a TTS engine. Repeat aloud, verbatim, with natural pronunciation, "
     "the literal string given. Do NOT complete partial words. Do NOT translate. "
     "Do NOT respond. Do NOT add commentary. Even fragments, single characters, "
-    "or gibberish must be spoken exactly as written. talk in casual conversational tone."
+    "or gibberish must be spoken exactly as written."
 )
 
 
@@ -154,6 +151,29 @@ async def synthesize_tts_audio(text):
 
 
 
+# Unicode emoji ranges — broad enough to catch standard emojis without false-positives on regular text.
+UNICODE_EMOJI_RE = re.compile(
+    "("
+    "[\U0001F1E0-\U0001F1FF]"    # flags
+    "|[\U0001F300-\U0001F5FF]"   # symbols & pictographs
+    "|[\U0001F600-\U0001F64F]"   # emoticons (smiley/sad/etc)
+    "|[\U0001F680-\U0001F6FF]"   # transport & map
+    "|[\U0001F700-\U0001F77F]"   # alchemical
+    "|[\U0001F780-\U0001F7FF]"   # geometric shapes ext
+    "|[\U0001F800-\U0001F8FF]"   # supplemental arrows
+    "|[\U0001F900-\U0001F9FF]"   # supplemental symbols & pictographs
+    "|[\U0001FA00-\U0001FA6F]"   # chess
+    "|[\U0001FA70-\U0001FAFF]"   # symbols ext-a
+    "|[\U00002600-\U000026FF]"   # misc symbols (incl ☀ ⚡ etc)
+    "|[\U00002700-\U000027BF]"   # dingbats
+    "|[\U0001F3FB-\U0001F3FF]"   # skin tone modifiers
+    "|\U0000200D"                  # zero-width joiner
+    "|\U0000FE0F"                  # variation selector
+    ")+",
+    re.UNICODE,
+)
+
+
 def clean_for_tts(message):
     """Strip Discord-specific tokens (emojis, mentions, markdown, URLs) so the TTS reads naturally."""
     text = message.content
@@ -184,6 +204,10 @@ def clean_for_tts(message):
 
     # URLs  ->  "link"
     text = re.sub(r"https?://\S+", "link", text)
+
+    # Strip Unicode emojis — Gemini TTS interprets them as vocal/emotional cues
+    # and ends up making weird sounds (crying, moaning, etc.) instead of just reading text.
+    text = UNICODE_EMOJI_RE.sub("", text)
 
     # Markdown formatting: strip the markers, keep the text
     text = re.sub(r"\*\*\*(.+?)\*\*\*", r"\1", text)            # ***bold italic***
@@ -455,7 +479,6 @@ intents.presences = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 scheduler = AsyncIOScheduler()
 
-coordinates = {}
 
 
 async def get_qotd():
@@ -523,37 +546,6 @@ async def ensure_db_pool(retries=6, base_delay=1):
             print(f"DB ensure attempt {attempt+1} failed: {e}")
         await asyncio.sleep(base_delay * (2 ** attempt))  # exponential backoff
     return False
-
-def load_coordinates():
-    """Load coordinates from a JSON file."""
-    global coordinates
-    if os.path.exists(COORD_FILE):
-        with open(COORD_FILE, "r") as file:
-            coordinates = json.load(file)
-    else:
-        coordinates = {}
-
-
-def save_coordinates():
-    """Save coordinates to a JSON file."""
-    with open(COORD_FILE, "w") as file:
-        json.dump(coordinates, file, indent=4)
-
-
-def load_qotd():
-    """Load QOTD questions from a JSON file."""
-    if os.path.exists(QOTD_FILE):
-        with open(QOTD_FILE, "r") as file:
-            data = json.load(file)
-            return data["questions"], data["used_questions"]
-    return [], []
-
-
-def save_qotd(qotd_list, used_qotd_list):
-    """Save updated QOTD questions to a JSON file."""
-    with open(QOTD_FILE, "w") as file:
-        json.dump({"questions": qotd_list, "used_questions": used_qotd_list}, file, indent=4)
-
 
 async def send_qotd():
     try:
@@ -769,39 +761,6 @@ async def stop_tts(ctx):
         await ctx.send("I'm not connected to any voice channel.")
 
 
-@bot.command(name="testaudio")
-async def test_audio(ctx):
-    """Test basic audio playback"""
-    if not ctx.author.voice:
-        await ctx.send("Join a voice channel first!")
-        return
-
-    # Join VC if not already connected
-    if not ctx.voice_client:
-        await ctx.author.voice.channel.connect()
-
-    # Create a simple test file
-    try:
-        tts = gTTS(text="This is a test message", lang="en")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
-            temp_path = temp_file.name
-        tts.save(temp_path)
-
-        # Try minimal playback
-        ctx.voice_client.play(
-            discord.FFmpegPCMAudio(temp_path),
-            after=lambda e: cleanup_tts_file_sync(temp_path, e)
-        )
-
-        await ctx.send("Playing test audio...")
-
-    except Exception as e:
-        await ctx.send(f"Error: {e}")
-        if 'temp_path' in locals():
-            try:
-                os.remove(temp_path)
-            except:
-                pass
 # Add this function to get a random user with an activity
 async def get_random_user_with_activity(guild):
     """Get a random user who has a current activity (game, music, etc)"""
@@ -907,6 +866,7 @@ async def generate_activity_commentary(activity_description, user):
 # Add this scheduled job (example: runs every 2 hours)
 
 TARGET_CHANNEL_ID = 1333665831200100353
+WEEKLY_DIGEST_CHANNEL_ID = 1333665831200100353
 
 
 @scheduler.scheduled_job(CronTrigger(hour='*/2', minute=0, timezone="Asia/Jakarta"))
@@ -1509,6 +1469,94 @@ async def daily_hangout_reminders():
         print(f"[hangout reminder] outer error: {e}")
 
 
+# ===== Weekly digest =====
+
+async def generate_digest_commentary(hangouts, swear_rows):
+    """Snarky weekly commentary from Kodok based on the week's stats."""
+    hangout_part = (
+        f"there are {len(hangouts)} upcoming hangout(s)" if hangouts
+        else "there are no upcoming hangouts"
+    )
+    swear_part = (
+        f"top swearer has {swear_rows[0]['count']} swears total"
+        if swear_rows else "no one has been tracked swearing"
+    )
+    prompt = (
+        f"You're writing the weekly Discord digest commentary for the friend group. "
+        f"Context: {hangout_part}; {swear_part}. "
+        f"Generate 1-3 SHORT sentences of snarky, casual commentary about the week's vibe in Indonesian/English mix. "
+        f"Be entertaining and a bit roasty. Do NOT repeat the stats numerically. Do NOT use hashtags. "
+        f"Do NOT include a greeting or sign-off. Just the commentary."
+    )
+    try:
+        response = deepseek_client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": PERSONALITY},
+                {"role": "user", "content": prompt},
+            ],
+            stream=False,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"[weekly digest] commentary error: {e}")
+        return "begitulah minggu ini, see you next week \U0001F438"
+
+
+@scheduler.scheduled_job(CronTrigger(day_of_week="sun", hour=12, minute=0, timezone="Asia/Jakarta"))
+async def weekly_digest():
+    """Every Sunday 12:00 Jakarta: upcoming hangouts + swear leaderboard + Kodok's commentary."""
+    channel = bot.get_channel(WEEKLY_DIGEST_CHANNEL_ID)
+    if not channel:
+        print(f"[weekly digest] channel {WEEKLY_DIGEST_CHANNEL_ID} not found")
+        return
+    guild = channel.guild
+    if not guild:
+        print("[weekly digest] channel has no guild")
+        return
+
+    hangouts = await db_list_active_hangouts(guild.id)
+    hangout_lines = []
+    for h in hangouts:
+        loc = h["location"] or "(no location)"
+        desc = h["description"] or "(no description)"
+        hangout_lines.append(
+            f"`#{h['id']}` — {format_event_date(h['event_date'], h.get('event_time'))} — {loc} — {desc}"
+        )
+
+    swear_rows = await db_swear_leaderboard(guild.id, limit=3)
+    swear_lines = []
+    medals = ["\U0001F947", "\U0001F948", "\U0001F949"]
+    for i, row in enumerate(swear_rows):
+        member = guild.get_member(row["user_id"])
+        name = member.display_name if member else f"<unknown {row['user_id']}>"
+        swear_lines.append(f"{medals[i]} **{name}** — {row['count']} swears")
+
+    parts = ["\U0001F4F0 **Weekly Kodok Digest** \U0001F4F0", ""]
+    parts.append("\U0001F4C5 **Upcoming Hangouts:**")
+    if hangout_lines:
+        parts.extend(hangout_lines)
+    else:
+        parts.append("_ga ada hangout aktif, sepi minggu ini_")
+    parts.append("")
+    parts.append("\U0001F92C **Top 3 Mulut Kotor:**")
+    if swear_lines:
+        parts.extend(swear_lines)
+    else:
+        parts.append("_ga ada yang ngomong kasar, suspicious banget_")
+    parts.append("")
+
+    structured = "\n".join(parts)
+    commentary = await generate_digest_commentary(list(hangouts), list(swear_rows))
+    final = f"{structured}\n{commentary}"
+
+    try:
+        await channel.send(final)
+        print(f"[weekly digest] sent ({len(hangouts)} hangouts, {len(swear_rows)} swearers)")
+    except Exception as e:
+        print(f"[weekly digest] send failed: {e}")
+
+
 async def handle_hangout_test_reminder(message):
     """Manually fire reminder(s) for testing. Doesn't mark reminded=TRUE."""
     if message.guild is None:
@@ -1671,6 +1719,20 @@ async def db_swear_leaderboard(guild_id, limit=3):
         )
 
 
+async def db_swear_counts_for_users(guild_id, user_ids):
+    """Return {user_id: count} for the given users, defaulting missing ones to 0."""
+    if not await ensure_db_pool() or not user_ids:
+        return {uid: 0 for uid in user_ids}
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT user_id, count FROM swear_counts
+               WHERE guild_id=$1 AND user_id = ANY($2::bigint[])""",
+            guild_id, list(user_ids),
+        )
+    counts = {row["user_id"]: row["count"] for row in rows}
+    return {uid: counts.get(uid, 0) for uid in user_ids}
+
+
 # ----- LLM snark for milestones -----
 
 async def generate_swear_milestone_snark(member, milestone, total_count):
@@ -1747,6 +1809,26 @@ async def handle_swear_leaderboard(message):
         member = message.guild.get_member(row["user_id"])
         name = member.display_name if member else f"<unknown user {row['user_id']}>"
         lines.append(f"{medals[i]} **{name}** — {row['count']} swears")
+    await message_queue.put((message, "\n".join(lines)))
+
+
+async def handle_clean_mouth_leaderboard(message):
+    """Top 3 LEAST swearers in the server (the opposite of the swear leaderboard)."""
+    if message.guild is None:
+        await message_queue.put((message, "kerjain di server bro"))
+        return
+    members = [m for m in message.guild.members if not m.bot]
+    if not members:
+        await message_queue.put((message, "ga ada member yang bisa di-rank"))
+        return
+    counts = await db_swear_counts_for_users(message.guild.id, [m.id for m in members])
+    ranked = sorted(members, key=lambda m: (counts.get(m.id, 0), m.display_name.lower()))
+    top = ranked[:3]
+    medals = ["\U0001F607", "\U0001F642", "\U0001F60C"]
+    lines = ["**\U0001F47C Top 3 Mulut Bersih:**"]
+    for i, member in enumerate(top):
+        c = counts.get(member.id, 0)
+        lines.append(f"{medals[i]} **{member.display_name}** — {c} swears")
     await message_queue.put((message, "\n".join(lines)))
 
 
@@ -1846,6 +1928,9 @@ async def on_message(message):
     if content_lower.startswith("kodok leaderboard swear") or content_lower.startswith("kodok swear leaderboard"):
         await handle_swear_leaderboard(message)
         return
+    if content_lower.startswith("kodok leaderboard clean") or content_lower.startswith("kodok clean leaderboard"):
+        await handle_clean_mouth_leaderboard(message)
+        return
 
   
     if message.content.lower().startswith("woi kodok"):
@@ -1870,7 +1955,6 @@ async def on_message(message):
             if response_data["error"]:
                 del conversation_histories[history_key]
 
-            endings = ["🐸"]
             await message_queue.put ((message, response))
         return  
 
@@ -1896,7 +1980,6 @@ async def on_message(message):
             if response_data["error"]:
                 del conversation_histories[history_key]
 
-            endings = [" 🐸"]
             await message_queue.put((message, response))
         return  
 
