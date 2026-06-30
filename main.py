@@ -226,13 +226,18 @@ def clean_for_tts(message):
     return text
 
 # ===== TTS message queue (so rapid messages don't get dropped) =====
+# Pipeline: tts_message_queue -> synth worker -> tts_ready_queue -> play worker.
+# The synth worker pre-renders up to TTS_READY_MAX clips ahead of playback so
+# consecutive messages play back-to-back instead of stalling on Gemini latency.
 TTS_QUEUE_MAX = 50
+TTS_READY_MAX = 3
 tts_message_queue = asyncio.Queue(maxsize=TTS_QUEUE_MAX)
-_tts_worker_started = False
+tts_ready_queue = asyncio.Queue(maxsize=TTS_READY_MAX)
+_tts_workers_started = False
 
 
-async def tts_worker():
-    """Pulls messages off the queue and TTSes them one at a time, in order."""
+async def tts_synth_worker():
+    """Pull messages, synthesize them, and push ready WAV paths onto the play queue."""
     while True:
         message = await tts_message_queue.get()
         try:
@@ -254,7 +259,27 @@ async def tts_worker():
                 temp_path = f.name
                 f.write(wav_bytes)
 
-            if not (tts_voice_client and tts_voice_client.is_connected()):
+            # User may have switched (or stoptts fired) during the synth call.
+            if active_tts_user != message.author.id or not (tts_voice_client and tts_voice_client.is_connected()):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+                continue
+
+            await tts_ready_queue.put((temp_path, message.author.id))
+        except Exception as e:
+            print(f"[tts] synth worker error: {e}")
+        finally:
+            tts_message_queue.task_done()
+
+
+async def tts_play_worker():
+    """Pull pre-rendered clips and play them one at a time, in order."""
+    while True:
+        temp_path, author_id = await tts_ready_queue.get()
+        try:
+            if active_tts_user != author_id or not (tts_voice_client and tts_voice_client.is_connected()):
                 try:
                     os.remove(temp_path)
                 except Exception:
@@ -269,24 +294,28 @@ async def tts_worker():
                 audio_source,
                 after=lambda e: cleanup_tts_file_sync(temp_path, e),
             )
-            print(f"[tts] playing queued message ({tts_message_queue.qsize()} left in queue)")
+            print(
+                f"[tts] playing clip ({tts_ready_queue.qsize()} pre-rendered, "
+                f"{tts_message_queue.qsize()} pending synth)"
+            )
 
             while tts_voice_client and tts_voice_client.is_playing():
                 await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[tts] worker error: {e}")
+            print(f"[tts] play worker error: {e}")
         finally:
-            tts_message_queue.task_done()
+            tts_ready_queue.task_done()
 
 
 def ensure_tts_worker_started():
-    """Idempotent: starts the worker once per bot lifetime."""
-    global _tts_worker_started
-    if _tts_worker_started:
+    """Idempotent: starts the synth + play workers once per bot lifetime."""
+    global _tts_workers_started
+    if _tts_workers_started:
         return
-    _tts_worker_started = True
-    asyncio.create_task(tts_worker())
-    print("[tts] worker task started")
+    _tts_workers_started = True
+    asyncio.create_task(tts_synth_worker())
+    asyncio.create_task(tts_play_worker())
+    print("[tts] synth + play workers started")
 
 
 BOT_NAME = "Metal Kodok"
@@ -748,6 +777,19 @@ async def stop_tts(ctx):
             tts_message_queue.get_nowait()
             tts_message_queue.task_done()
             drained += 1
+        except asyncio.QueueEmpty:
+            break
+
+    # Drain pre-rendered clips and delete their temp files
+    while not tts_ready_queue.empty():
+        try:
+            temp_path, _ = tts_ready_queue.get_nowait()
+            tts_ready_queue.task_done()
+            drained += 1
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
         except asyncio.QueueEmpty:
             break
 
