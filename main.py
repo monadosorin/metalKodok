@@ -398,7 +398,7 @@ async def ask_deepseek(history_key, retry_count=3):
                          for msg in conversation_histories.get(history_key, [])]
 
             response = deepseek_client.chat.completions.create(
-                model="deepseek-chat",
+                model="deepseek-v4-pro",
                 messages=messages,
                 stream=False
             )
@@ -893,7 +893,7 @@ async def generate_activity_commentary(activity_description, user):
 
     try:
         response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": prompt}
@@ -1141,7 +1141,7 @@ async def deepseek_extract_hangout(user_message):
     )
     try:
         response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -1192,7 +1192,7 @@ async def deepseek_match_hangout(user_message, hangouts, want_updates=False):
     )
     try:
         response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
@@ -1532,7 +1532,7 @@ async def generate_digest_commentary(hangouts, swear_rows):
     )
     try:
         response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": prompt},
@@ -1788,7 +1788,7 @@ async def generate_swear_milestone_snark(member, milestone, total_count):
     )
     try:
         response = deepseek_client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             messages=[
                 {"role": "system", "content": PERSONALITY},
                 {"role": "user", "content": prompt},
