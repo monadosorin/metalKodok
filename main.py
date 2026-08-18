@@ -937,11 +937,25 @@ async def random_activity_commentary():
         print(f"Error in activity commentary: {e}")
 
 @bot.command(name="stalk324")
-async def stalk_command(ctx):
-    """Manually trigger activity commentary"""
+async def stalk_command(ctx, member: discord.Member = None):
+    """Manually trigger activity commentary. Tag someone to stalk them specifically."""
     try:
         print(f"🕵️ Stalk command triggered in {ctx.guild.name}")
-        user = await get_random_user_with_activity(ctx.guild)
+
+        if member:
+            print(f"🎯 Targeted stalk on: {member.display_name}")
+
+            if member.bot:
+                await ctx.send(f"{member.mention} itu bot bro, ngapain distalk 🤖")
+                return
+
+            if member.status == discord.Status.offline:
+                await ctx.send(f"{member.mention} lagi offline, ga keliatan lagi ngapain 😴")
+                return
+
+            user = member
+        else:
+            user = await get_random_user_with_activity(ctx.guild)
 
         if not user:
             await ctx.send("Ga ada yang lagi doing anything interesting nih... semua pada idle 😴")
@@ -965,6 +979,17 @@ async def stalk_command(ctx):
         print(f"❌ Stalk command error: {e}")
         import traceback
         traceback.print_exc()
+
+
+@stalk_command.error
+async def stalk_command_error(ctx, error):
+    """Tell the user when the tagged member can't be resolved"""
+    if isinstance(error, commands.MemberNotFound):
+        await ctx.send("Siapa tuh? Ga nemu orangnya di server ini 🧐")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send("Tag orangnya yang bener dong, contoh: `!stalk324 @someone`")
+    else:
+        print(f"❌ Stalk command error: {error}")
 
 # Update the daily_stalk function to pass the user to generate_activity_commentary
 @scheduler.scheduled_job(CronTrigger(hour=19, minute=0, timezone="Asia/Jakarta"))  # 7 PM Jakarta time
