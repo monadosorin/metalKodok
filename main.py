@@ -492,6 +492,33 @@ async def init_db():
                     PRIMARY KEY (guild_id, user_id)
                 )
             """)
+            # Ensure questions table exists (QOTD pool)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS questions (
+                    id SERIAL PRIMARY KEY,
+                    question TEXT NOT NULL
+                )
+            """)
+            # Ensure used_questions table exists.
+            # NOTE: the ON DELETE CASCADE mirrors production, but it means
+            # get_qotd()'s "INSERT into used_questions then DELETE the question"
+            # wipes the used_questions row it just wrote. Kept as-is so a fresh
+            # database matches the live one; see the QOTD recycling fix.
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS used_questions (
+                    id SERIAL PRIMARY KEY,
+                    question_id INTEGER REFERENCES questions(id) ON DELETE CASCADE
+                )
+            """)
+            # Ensure coordinates table exists (Minecraft coords)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS coordinates (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    x INTEGER NOT NULL,
+                    z INTEGER NOT NULL
+                )
+            """)
         return pool
     except Exception as e:
         print(f"Error connecting to the database: {e}")
